@@ -1,14 +1,6 @@
 import itertools
 
-
-def twos(a):
-    itr = iter(a)
-    while True:
-        try:
-            yield next(itr), next(itr)
-        except StopIteration:
-            return
-
+from common import twos
 
 def draws(V):
     # TODO: filter identical draws

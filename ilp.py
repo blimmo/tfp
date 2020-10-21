@@ -2,7 +2,6 @@ import itertools
 import networkx
 import pulp
 from pulp import lpSum as csum
-# import mip
 
 from common import all_vectors
 
@@ -16,7 +15,6 @@ def check_positive(G, winners):
 
 def solve(G):
     return {v for v in G.v if solve_one(G, v)}
-
 
 def possible_chi(ln, i):
     if i > 2 ** ln:
@@ -34,11 +32,8 @@ def rec(possible, out, remaining, last):
             for k in range(1, min(a, remaining) + 1):
                 yield from rec(possible[:j] + (a - k,) + possible[j + 1:], out + (j,) * k, remaining - k, j)
 
-
-
 def solve_one(G, v_star):
     count = 0
-    # print(v_star)
     if G.feedback == ():
         return v_star == G.order[0]
 
@@ -65,12 +60,10 @@ def solve_one(G, v_star):
         # guess a tree for H
         for p_seq in itertools.product(range(total_vertices), repeat=total_vertices - 2):
             undir_h = networkx.from_prufer_sequence(p_seq)
-            # guess a root of H
-            # for root in range(total_vertices):
-            root = 0
+            # possibly should be guessing root here
             # tree -> arborescence
             h = networkx.DiGraph()
-            for u, v in networkx.dfs_edges(undir_h, root):
+            for u, v in networkx.dfs_edges(undir_h, 0):
                 h.add_edge(u, v)
             # guess the types of the extra vertices
             for psi_vec in all_vectors(num, extra_vertices):
@@ -97,7 +90,6 @@ def solve_one(G, v_star):
                             break
                     else:
                         # guess the number of vertices below each vertex of H
-                        # for chi in itertools.product(range(G.ln + 1), repeat=total_vertices):
                         for chi in possible_chi(G.ln, total_vertices):
                             count += 1
                             if solve_ilp(num, a_f, h, tau, chi, psi):
@@ -110,14 +102,10 @@ def solve_one(G, v_star):
 
 
 def solve_ilp(num, a_f, h, tau, chi, psi):
-    # prob = mip.Model()
-    # prob.emphasis = mip.SearchEmphasis.FEASIBILITY
-    # prob.verbose = 0
     prob = pulp.LpProblem("p")
     types = tuple(i / 2 for i in range(2 * len(a_f) + 1))
     vertices = tuple(h.nodes)
     variables = pulp.LpVariable.dicts("x", (types, vertices), lowBound=0, cat=pulp.const.LpInteger)
-    # variables = {i: [prob.add_var(name=f"x_{i}_{v}", var_type=mip.INTEGER, lb=0) for v in vertices] for i in types}
     # C_1
     for i in types:
         prob += csum([variables[i][u] for u in vertices]) == (num[int(i)] if i.is_integer() else 1), f"C_1_{i}"
@@ -136,23 +124,12 @@ def solve_ilp(num, a_f, h, tau, chi, psi):
         rhs = 2 ** chi[u] - sum(2 ** chi[v] for v in h.successors(u))
         prob += csum(lhs) == rhs, f"C_3_{u}"
 
-    # status = prob.optimize(max_solutions=1)
     prob.solve(solver)
     status = prob.status
     # print(".", end="")
-    # if status in (mip.OptimizationStatus.INFEASIBLE, mip.OptimizationStatus.NO_SOLUTION_FOUND):
     if status == pulp.LpStatusInfeasible:
         return False
-    # elif status in (mip.OptimizationStatus.FEASIBLE, mip.OptimizationStatus.OPTIMAL):
     elif status == pulp.LpStatusOptimal:
-        # print(tau)
-        # print("     " + " ".join(str(v) for v in vertices) + f"   ({a_f}, {psi})")
-        # for i in types:
-        #     print(f"{i}: ", end="")
-        #     for v in vertices:
-        #         print(int(variables[i][v].varValue), end=" ")
-        #     print()
-        # solve_ilp(num, a_f, h, tau, chi, psi)
         return True
     else:
         raise ValueError(f"Unknown status {status}")

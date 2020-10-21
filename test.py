@@ -3,7 +3,7 @@ import os
 
 import bruteforce
 import dp
-import fpt
+import ilp
 from graph import Graph
 
 
@@ -12,7 +12,7 @@ def powerset(s):
     return itertools.chain.from_iterable(itertools.combinations(s, r) for r in range(len(s)+1))
 
 
-tournament = Graph(2)
+tournament = Graph(3)
 # for order in itertools.permutations(V):
 if os.getenv("DEBUG") is None:
     to_iter = enumerate(powerset(tournament.e))
@@ -33,7 +33,7 @@ for i, feedback in to_iter:
     #     print("!----------------------!")
     #     print()
     #
-    result = fpt.solve(tournament)
+    result = ilp.solve(tournament)
     if result != winners:
         print()
         print("!----------------------!")
