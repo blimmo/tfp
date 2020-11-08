@@ -4,6 +4,7 @@ import os
 import bruteforce
 import dp
 import ilp
+import sat
 from graph import Graph
 
 
@@ -12,7 +13,7 @@ def powerset(s):
     return itertools.chain.from_iterable(itertools.combinations(s, r) for r in range(len(s)+1))
 
 
-tournament = Graph(3)
+tournament = Graph(2)
 # for order in itertools.permutations(V):
 if os.getenv("DEBUG") is None:
     to_iter = enumerate(powerset(tournament.e))
@@ -22,9 +23,10 @@ else:
 for i, feedback in to_iter:
     tournament.make_tournament(feedback=feedback)
     print(i, feedback, tournament)
+    print(sat.solve(tournament))
 
     # first solve by brute force
-    winners = bruteforce.solve(tournament)
+    # winners = bruteforce.solve(tournament)
 
     # n^k algo
     # result = dp.solve(tournament)
@@ -33,10 +35,10 @@ for i, feedback in to_iter:
     #     print("!----------------------!")
     #     print()
     #
-    result = ilp.solve(tournament)
-    if result != winners:
-        print()
-        print("!----------------------!")
-        print(winners, result)
-        print("!----------------------!")
-        print()
+    # result = ilp.solve(tournament)
+    # if result != winners:
+    #     print()
+    #     print("!----------------------!")
+    #     print(winners, result)
+    #     print("!----------------------!")
+    #     print()

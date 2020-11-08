@@ -1,20 +1,24 @@
 import itertools
 import math
+from functools import reduce
+import operator
 
-from pysat.solvers import Glucose4 as SAT
+import aiger
+import aiger_sat
 
 
-class Variables:
-    def __init__(self):
-        self.k = 1
-        self.vars = {}
+def at_most_one(literals):
+    return reduce(operator.and_, (~a | ~b for a, b in itertools.combinations(literals, 2)))
 
-    def add(self, index):
-        self.vars[index] = self.k
-        self.k += 1
+def at_least_one(literals):
+    return reduce(operator.or_, literals)
 
-    def __getitem__(self, index):
-        return self.vars[index]
+def exactly_one(literals):
+    literals = list(literals)
+    return at_most_one(literals) & at_least_one(literals)
+
+def all_(literals):
+    return reduce(operator.and_, literals)
 
 
 def solve_one(D, v_star):
@@ -39,91 +43,100 @@ def solve_one(D, v_star):
     dummy = {-i for i in range(1, l + 1)}
     afud = a_f.union(dummy)
     afuddv = afud.difference({v_star})
+    def distinct2(s):
+        return list(itertools.permutations(s, 2))
 
-    vars = Variables()
-
-    # l_vars
-    for u, v in itertools.permutations(afud, 2):
-        if v != v_star:
-            vars.add(("L", u, v))
-    # psi_vars
-    for u in dummy:
-        for i in typesaf:
-            vars.add(("psi", u, i))
-    # chi_vars
-    for u in afud:
-        for b in range(D.ln + 1):
-            vars.add(("chi", u, b))
-    # length_vars
-    for u, v in itertools.combinations(afud, 2):
-        if v != v_star:
-            for b in range(math.floor(math.log2(D.ln))):
-                vars.add(("len", u, v, b))
-    # dist_vars
-    for u in afuddv:
-        for d in range(1, D.ln):
-            vars.add(("dist", u, d))
+    l_vars = {
+        (u, v): aiger.atom(f"L_{u}->{v}")
+        for u, v in distinct2(afud)
+        if v != v_star
+    }
+    psi_vars = {
+        (u, i): aiger.atom(f"psi_{u}<={i}")
+        for u in dummy
+        for i in typesaf
+    }
+    chi_vars = {
+        (u, b): aiger.atom(f"chi_{u}_{b}")
+        for u in afud
+        for b in range(D.ln + 1)
+    }
+    b_indices = list(range(math.floor(math.log2(D.ln))))
+    length_vars = {
+        (u, v, b): aiger.atom(f"len_{u}->{v}_{b}")
+        for b in b_indices
+        for u, v in distinct2(afud)
+        if v != v_star
+    }
+    dist_vars = {
+        (u, d): aiger.atom(f"dist_{u}_{d}")
+        for u in afuddv
+        for d in range(1, D.ln + 1)
+    }
     # g vars
 
-    realizable = SAT()
-
-    def at_most_one(literals):
-        return tuple((-a, -b) for a, b in itertools.combinations(literals, 2))
-
-    def exactly_one(literals):
-        return at_most_one(literals) + (literals,)
-
+    realizable = aiger.atom(True)
     # validity
     for u in afuddv:
         # AtMostOneParent(u)
-        realizable.append_formula(at_most_one(tuple(vars["L", v, u] for v in afud if v != u)))
+        realizable &= at_most_one(l_vars[v, u] for v in afud if v != u)
     for u in dummy:
         # ExactlyOneType(u)
-        realizable.append_formula(exactly_one(tuple(vars["psi", u, i] for i in typesaf)))
+        realizable &= exactly_one(psi_vars[u, i] for i in typesaf)
     for u in afud:
         # ExactlyOneSizeBit(u)
-        realizable.append_formula(exactly_one(tuple(vars["chi", u, b] for b in range(D.ln + 1))))
-        realizable.add_clause((vars["chi", v_star, D.ln],))
+        realizable &= exactly_one(chi_vars[u, b] for b in range(D.ln + 1))
+    realizable &= chi_vars[v_star, D.ln]
     for u in afuddv:
         # AtMostOneDist(u)
-        realizable.append_formula(at_most_one(tuple(vars["dist", u, d] for d in range(1, D.ln))))
+        realizable &= at_most_one(dist_vars[u, d] for d in range(1, D.ln + 1))
     for u in v_f:
         # AtLeastOneDist(u)
-        realizable.add_clause(tuple(vars["dist", u, d] for d in range(1, D.ln)))
+        realizable &= at_least_one(dist_vars[u, d] for d in range(1, D.ln + 1))
     for u in v_f:
-        realizable.add_clause((-vars["dist", u, 1], vars["L", v_star, u]))
-        # for d in range(2, D.ln):
+        realizable &= dist_vars[u, 1].implies(l_vars[v_star, u])
+        for d in range(2, D.ln):
             # VerifyDist_d(u)
-            # realizable.add_clause((vars["dist", u, d],))
-            # pass
-    # for u in dummy:
-
-    def reachable(u):
-        return tuple(vars["dist", u, d] for d in range(1, D.ln))
-
-
-
+            realizable &= dist_vars[u, d].implies(at_least_one(
+                l_vars[w, u] & dist_vars[w, d - 1]
+                for w in afuddv if w != u
+            ))
+    reachable = {u: at_least_one(dist_vars[u, d] for d in range(1, D.ln)) for u in dummy}
+    notleaf = {u: ~reachable[u] | at_least_one(l_vars[u, w] for w in afuddv if w != u) for u in dummy}
+    isnode = {u: aiger.atom(True) if u in a_f else reachable[u] for u in afud}
+    isarc = {
+        (u, v): isnode[u] & isnode[v] & l_vars[u, v] if v != v_star else aiger.atom(False)
+        for u, v in distinct2(afud)
+    }
+    # for u, v in itertools.permutations(afud, 2):
     def beats(u, v):
         if u in a_f and v in a_f:
             if v in D[u]:
-                return ()
+                return aiger.atom(True)
             else:
-                return False  # uh that's not a clause
+                return aiger.atom(False)
         if u in a_f:
-            return tuple(vars["psi", u, i] for i in typesaf if i > tau[u])
+            return at_least_one(psi_vars[v, i] for i in typesaf if i > tau[u])
         if v in a_f:
-            return tuple(vars["psi", v, i] for i in typesaf if i > tau[v])
-        # return tuple(itertools.combinations(vars["psi", u,for i, j in itertools.combinations(typesaf, 2)
+            return at_least_one(psi_vars[u, i] for i in typesaf if i > tau[v])
+        return at_least_one(psi_vars[u, i] & psi_vars[v, j]
+                            for i, j in itertools.combinations(reversed(typesaf), 2))
 
-    realizable.solve()
-    m = realizable.get_model()
-    for k, v in vars.vars.items():
-        if v in m:
-            print(k)
-        elif -v in m:
-            print(f"¬{k}")
-        else:
-            print("oops")
+    ifarcthenvalid = {(u, v): isarc[u, v].implies(beats(u, v)) for u, v in distinct2(afud)}
+    inclosure = {u: isnode[u] & at_least_one(l_vars[u, p] & l_vars[u, q]
+                                             for p, q in itertools.combinations(afuddv, 2)
+                                             if p != u and q != u) for u in dummy}
+    childofclosure = {u: isnode[u] & ~inclosure[u] for u in dummy}
+    nodeg2consecdum = {
+        (u, v): (isarc[u, v] & childofclosure[u]).implies(childofclosure[v])
+        for u, v in distinct2(dummy)
+    }
+
+
+    s = aiger_sat.SolverWrapper()
+    s.add_expr(realizable)
+    print(s.get_model())
+    return s.is_sat()
 
 def solve(G):
     return {v for v in (1,) if solve_one(G, v)}
