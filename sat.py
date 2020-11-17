@@ -115,6 +115,16 @@ class Conditions:
         }
         return ret
 
+    def gen_same_bit_vars(self):
+        """For LocCheckSize(Dec/Diff)"""
+        self.samebitvars = {(u, v, b): aiger.atom(f"samebit_{u}_{v}_{b}")
+                            for b in self.chi_b_indices for u, v in distinct2(self.afud)}
+        samebitclauses = all_(all_(self.samebitvars[u, v, b] == ((self.chi_vars[u, b] & self.chi_vars[v, b])
+                                                                 | (~self.chi_vars[u, b] & ~self.chi_vars[v, b]))
+                                   for b in self.chi_b_indices)
+                              for u, v in distinct2(self.afud))
+        return samebitclauses
+
     # g vars
 
     # validity
@@ -200,19 +210,20 @@ class Conditions:
         # for u, v in distinct2(afud) if v != v_star  # possibly should just be false for v_star
         assert u in self.afud and v in self.afud and u != v
         return (self.isarc(u, v) & (aiger.atom(True) if u in self.a_f else self.inclosure(u))
-                 ).implies(all_(~self.length_vars[u, v, b] for b in self.length_b_indices))
+                ).implies(all_(~self.length_vars[u, v, b] for b in self.length_b_indices))
 
     def locchecksizedec(self, u, v):
         assert u in self.afud and v in self.afud and u != v
-        stvars = {(u, v, b): aiger.atom(f"lcsd_{u}_{v}_{b}") for b in self.chi_b_indices for u, v in distinct2(self.afud)}
-        stclauses = all_(all_(stvars[u, v, b] == ((self.chi_vars[u, b] & self.chi_vars[v, b])
-                                                  | (~self.chi_vars[u, b] & ~self.chi_vars[v, b]))
-                              for b in self.chi_b_indices)
-                         for u, v in distinct2(self.afud))
-
         return self.isarc(u, v).implies(
-            at_least_one(all_(stvars[u, v, i] for i in self.chi_b_indices if i > b)  # largest condition
-                         & ~stvars[u, v, b] & self.chi_vars[u, b] & ~self.chi_vars[v, b] for b in self.chi_b_indices)
+            at_least_one(all_(self.samebitvars[u, v, i] for i in self.chi_b_indices if i > b)  # largest condition
+                         & ~self.samebitvars[u, v, b] & self.chi_vars[u, b] & ~self.chi_vars[v, b]
+                         for b in self.chi_b_indices)
+        )
+
+    def locchecksizediff(self, u, v, w):
+        assert u in self.afud and v in self.afud and w in self.afud
+        return (self.isarc(u, v) & self.isarc(u, w)).implies(
+            ~all_(self.samebitvars[v, w, b] for b in self.chi_b_indices)
         )
 
     # realizable = aiger.atom(True)
