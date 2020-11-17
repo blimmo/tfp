@@ -20,7 +20,7 @@ class Test(unittest.TestCase):
             afuddv=afud
         )
         l = cond.gen_l_vars()
-        a = cond.atmostoneparent(1)
+        a = cond.at_most_one_parent(1)
         self.and_false(a, l[0, 1], l[2, 1])
         self.and_true(a, l[0, 1], ~l[2, 1])
         self.and_true(a, ~l[0, 1], ~l[2, 1])
@@ -56,7 +56,7 @@ class Test(unittest.TestCase):
         sb = cond.gen_same_bit_vars()
         l = cond.l_vars
         chi = cond.chi_vars
-        a = sb & cond.locchecksizedec(0, 1)
+        a = sb & cond.loc_check_size_dec(0, 1)
         self.and_true(a, l[0, 1], chi[0, 0], ~chi[0, 1], chi[0, 2],
                       chi[1, 0], ~chi[1, 1], ~chi[1, 2])
         self.and_false(a, l[0, 1], chi[0, 0], ~chi[0, 1], ~chi[0, 2],
@@ -77,7 +77,7 @@ class Test(unittest.TestCase):
         sb = cond.gen_same_bit_vars()
         l = cond.l_vars
         chi = cond.chi_vars
-        a = sb & cond.locchecksizediff(0, 1, 2)
+        a = sb & cond.loc_check_size_diff(0, 1, 2)
         self.and_true(a, l[0, 1], l[0, 2],
                       chi[1, 0], ~chi[1, 1], chi[1, 2],
                       chi[2, 0], ~chi[2, 1], ~chi[2, 2])
