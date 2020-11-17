@@ -42,100 +42,178 @@ def solve_one(D, v_star):
 
     l = 4 * (2 * len(a_f) + 1) - len(a_f)
     dummy = {-i for i in range(1, l + 1)}
-    afud = a_f.union(dummy)
-    afuddv = afud.difference({v_star})
+    cond = Conditions.make(D, v_star, v_f, a_f, dummy, typesaf, tau)
 
-    l_vars = {
-        (u, v): aiger.atom(f"L_{u}->{v}")
-        for u, v in distinct2(afud)
-        if v != v_star
-    }
-    psi_vars = {
-        (u, i): aiger.atom(f"psi_{u}<={i}")
-        for u in dummy
-        for i in typesaf
-    }
-    chi_b_indices = list(range(D.ln + 1))
-    chi_vars = {
-        (u, b): aiger.atom(f"chi_{u}_{b}")
-        for u in afud
-        for b in chi_b_indices
-    }
-    length_b_indices = list(range(math.floor(math.log2(D.ln))))
-    length_vars = {
-        (u, v, b): aiger.atom(f"len_{u}->{v}_{b}")
-        for b in length_b_indices
-        for u, v in distinct2(afud)
-        if v != v_star
-    }
-    dist_b_indices = list(range(1, D.ln + 1))
-    dist_vars = {
-        (u, d): aiger.atom(f"dist_{u}_{d}")
-        for u in afuddv
-        for d in dist_b_indices
-    }
+
+class Conditions:
+    def __init__(self, D=None, ln=None, v_star=None, v_f=None, a_f=None, dummy=None,
+                 typesaf=None, tau=None, afud=None, afuddv=None):
+        self.D = D
+        self.ln = ln
+        self.v_star = v_star
+        self.v_f = v_f
+        self.a_f = a_f
+        self.dummy = dummy
+        self.typesaf = typesaf
+        self.tau = tau
+        self.afud = afud
+        self.afuddv = afuddv
+
+    @classmethod
+    def make(cls, D, v_star, v_f, a_f, dummy, typesaf, tau):
+        afud = a_f.union(dummy)
+        ins = cls(D, D.ln, v_star, v_f, a_f, dummy, typesaf, tau, afud,
+                  afud.difference({v_star}))
+        ins.gen_l_vars()
+        ins.gen_psi_vars()
+        ins.gen_chi_vars()
+        ins.gen_length_vars()
+        ins.gen_dist_vars()
+        return ins
+
+    def gen_l_vars(self):
+        self.l_vars = ret = {
+            (u, v): aiger.atom(f"L_{u}->{v}")
+            for u, v in distinct2(self.afud)
+            if v != self.v_star
+        }
+        return ret
+
+    def gen_psi_vars(self):
+        self.psi_vars = ret = {
+            (u, i): aiger.atom(f"psi_{u}<={i}")
+            for u in self.dummy
+            for i in self.typesaf
+        }
+        return ret
+
+    def gen_chi_vars(self):
+        self.chi_b_indices = list(range(self.ln + 1))
+        self.chi_vars = ret = {
+            (u, b): aiger.atom(f"chi_{u}_{b}")
+            for u in self.afud
+            for b in self.chi_b_indices
+        }
+        return ret
+
+    def gen_length_vars(self):
+        self.length_b_indices = list(range(math.floor(math.log2(D.ln))))
+        self.length_vars = ret = {
+            (u, v, b): aiger.atom(f"len_{u}->{v}_{b}")
+            for b in self.length_b_indices
+            for u, v in distinct2(self.afud)
+            if v != self.v_star
+        }
+        return ret
+
+    def gen_dist_vars(self):
+        self.dist_b_indices = list(range(1, self.ln + 1))
+        self.dist_vars = ret = {
+            (u, d): aiger.atom(f"dist_{u}_{d}")
+            for u in self.afuddv
+            for d in self.dist_b_indices
+        }
+        return ret
+
     # g vars
 
     # validity
-    atmostoneparent = {u: at_most_one(l_vars[v, u] for v in afud if v != u) for u in afuddv}
-    exactlyonetype = {u: exactly_one(psi_vars[u, i] for i in typesaf) for u in dummy}
-    exactlyonesizebit = {u: exactly_one(chi_vars[u, b] for b in chi_b_indices) for u in afud}
-    atmostonedist = {u: at_most_one(dist_vars[u, d] for d in dist_b_indices) for u in afuddv}
-    atleastonedist = {u: at_least_one(dist_vars[u, d] for d in dist_b_indices) for u in v_f}
-    def verify_dist(u, d):
+    def atmostoneparent(self, u):
+        assert u in self.afuddv
+        return at_most_one(self.l_vars[v, u] for v in self.afud if v != u)
+
+    def exactlyonetype(self, u):
+        assert u in self.dummy
+        return exactly_one(self.psi_vars[u, i] for i in self.typesaf)
+
+    def exactlyonesizebit(self, u):
+        assert u in self.afud
+        return exactly_one(self.chi_vars[u, b] for b in self.chi_b_indices)
+
+    def atmostonedist(self, u):
+        assert u in self.afuddv
+        return at_most_one(self.dist_vars[u, d] for d in self.dist_b_indices)
+
+    def atleastonedist(self, u):
+        assert u in self.v_f
+        return at_least_one(self.dist_vars[u, d] for d in self.dist_b_indices)
+
+    def verify_dist(self, u, d):
         # for u in v_f:
         # VerifyDist_d(u)
         if d == 1:
-            return dist_vars[u, d].implies(l_vars[v_star, u])
-        return dist_vars[u, d].implies(at_least_one(
-            l_vars[w, u] & dist_vars[w, d - 1]
-            for w in afuddv if w != u
+            return self.dist_vars[u, d].implies(self.l_vars[self.v_star, u])
+        return self.dist_vars[u, d].implies(at_least_one(
+            self.l_vars[w, u] & self.dist_vars[w, d - 1]
+            for w in self.afuddv if w != u
         ))
-    reachable = {u: at_least_one(dist_vars[u, d] for d in dist_b_indices) for u in dummy}
-    notleaf = {u: ~reachable[u] | at_least_one(l_vars[u, w] for w in afuddv if w != u) for u in dummy}
-    isnode = {u: aiger.atom(True) if u in a_f else reachable[u] for u in afud}
-    isarc = {
-        (u, v): isnode[u] & isnode[v] & l_vars[u, v] if v != v_star else aiger.atom(False)
-        for u, v in distinct2(afud)
-    }
+
+    def reachable(self, u):
+        assert u in self.dummy
+        return at_least_one(self.dist_vars[u, d] for d in self.dist_b_indices)
+
+    def notleaf(self, u):
+        assert u in self.dummy
+        return ~self.reachable(u) | at_least_one(self.l_vars[u, w] for w in self.afuddv if w != u)
+
+    def isnode(self, u):
+        assert u in self.afud
+        return aiger.atom(True) if u in self.a_f else self.reachable(u)
+
+    def isarc(self, u, v):
+        assert u in self.afud and v in self.afud and u != v
+        return self.isnode(u) & self.isnode(v) & self.l_vars[u, v] if v != self.v_star else aiger.atom(False)
+
     # for u, v in itertools.permutations(afud, 2):
-    def beats(u, v):
-        if u in a_f and v in a_f:
-            if v in D[u]:
+    def beats(self, u, v):
+        if u in self.a_f and v in self.a_f:
+            if v in self.D[u]:
                 return aiger.atom(True)
             else:
                 return aiger.atom(False)
-        if u in a_f:
-            return at_least_one(psi_vars[v, i] for i in typesaf if i > tau[u])
-        if v in a_f:
-            return at_least_one(psi_vars[u, i] for i in typesaf if i > tau[v])
-        return at_least_one(psi_vars[u, i] & psi_vars[v, j]
-                            for i, j in itertools.combinations(reversed(typesaf), 2))
+        if u in self.a_f:
+            return at_least_one(self.psi_vars[v, i] for i in self.typesaf if i > self.tau[u])
+        if v in self.a_f:
+            return at_least_one(self.psi_vars[u, i] for i in self.typesaf if i > self.tau[v])
+        return at_least_one(self.psi_vars[u, i] & self.psi_vars[v, j]
+                            for i, j in itertools.combinations(reversed(self.typesaf), 2))
 
-    ifarcthenvalid = {(u, v): isarc[u, v].implies(beats(u, v)) for u, v in distinct2(afud)}
-    inclosure = {u: isnode[u] & at_least_one(l_vars[u, p] & l_vars[u, q]
-                                             for p, q in itertools.combinations(afuddv, 2)
-                                             if p != u and q != u) for u in dummy}
-    childofclosure = {u: isnode[u] & ~inclosure[u] for u in dummy}
-    nodeg2consecdum = {
-        (u, v): (isarc[u, v] & childofclosure[u]).implies(childofclosure[v])
-        for u, v in distinct2(dummy)
-    }
+    def ifarcthenvalid(self, u, v):
+        assert u in self.afud and v in self.afud and u != v
+        return self.isarc(u, v).implies(self.beats(u, v))
 
-    locchecklensensible = {
-        (u, v): (isarc[u, v] & (aiger.atom(True) if u in a_f else inclosure[u])
-                 ).implies(all_(~length_vars[u, v, b] for b in length_b_indices))
-        for u, v in distinct2(afud) if v != v_star  # possibly should just be false for v_star
-    }
-    stvars = {(u, v, b): aiger.atom(f"lcsd_{u}_{v}_{b}") for b in chi_b_indices for u, v in distinct2(afud)}
-    stclauses = all_(all_(stvars[u, v, b] == ((chi_vars[u, b] & chi_vars[v, b])
-                                              | (~chi_vars[u, b] & ~chi_vars[v, b]))
-                          for b in chi_b_indices)
-                     for u, v in distinct2(afud))
-    locchecksizedec = {(u, v): isarc[u, v].implies(
-        at_least_one(all_(stvars[u, v, i] for i in chi_b_indices if i > b)  # largest condition
-                     & ~stvars[u, v, b] & chi_vars[u, b] & ~chi_vars[v, b] for b in chi_b_indices)
-    ) for u, v in distinct2(afud)}
+    def inclosure(self, u):
+        assert u in self.dummy
+        return self.isnode(u) & at_least_one(self.l_vars[u, p] & self.l_vars[u, q]
+                                             for p, q in itertools.combinations(self.afuddv, 2)
+                                             if p != u and q != u)
+
+    def childofclosure(self, u):
+        assert u in self.dummy
+        return self.isnode(u) & ~self.inclosure(u)
+
+    def nodeg2consecdum(self, u, v):
+        assert u in self.dummy and v in self.dummy and u != v
+        return (self.isarc(u, v) & self.childofclosure(u)).implies(self.childofclosure(v))
+
+    def locchecklensensible(self, u, v):
+        # for u, v in distinct2(afud) if v != v_star  # possibly should just be false for v_star
+        assert u in self.afud and v in self.afud and u != v
+        return (self.isarc(u, v) & (aiger.atom(True) if u in self.a_f else self.inclosure(u))
+                 ).implies(all_(~self.length_vars[u, v, b] for b in self.length_b_indices))
+
+    def locchecksizedec(self, u, v):
+        assert u in self.afud and v in self.afud and u != v
+        stvars = {(u, v, b): aiger.atom(f"lcsd_{u}_{v}_{b}") for b in self.chi_b_indices for u, v in distinct2(self.afud)}
+        stclauses = all_(all_(stvars[u, v, b] == ((self.chi_vars[u, b] & self.chi_vars[v, b])
+                                                  | (~self.chi_vars[u, b] & ~self.chi_vars[v, b]))
+                              for b in self.chi_b_indices)
+                         for u, v in distinct2(self.afud))
+
+        return self.isarc(u, v).implies(
+            at_least_one(all_(stvars[u, v, i] for i in self.chi_b_indices if i > b)  # largest condition
+                         & ~stvars[u, v, b] & self.chi_vars[u, b] & ~self.chi_vars[v, b] for b in self.chi_b_indices)
+        )
 
     # realizable = aiger.atom(True)
     # realizable &= chi_vars[v_star, D.ln]
