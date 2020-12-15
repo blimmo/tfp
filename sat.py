@@ -1,10 +1,9 @@
 import itertools
 import math
-from functools import reduce
 import operator
+from functools import reduce
 
 import aiger
-import aiger_sat
 
 
 def at_most_one(literals):
@@ -50,6 +49,10 @@ class Conditions:
                  typesaf=None, tau=None, afud=None, afuddv=None):
         self.graph = graph
         self.ln = ln
+        if ln is not None:
+            self.ln_indices = list(range(ln + 1))
+            self.lln = lln = math.ceil(math.log2(ln + 1))
+            self.lln_indices = list(range(lln))
         self.v_star = v_star
         self.v_f = v_f
         self.a_f = a_f
@@ -88,19 +91,17 @@ class Conditions:
         return ret
 
     def gen_chi_vars(self):
-        self.chi_b_indices = list(range(self.ln + 1))
         self.chi_vars = ret = {
             (u, b): aiger.atom(f"chi_{u}_{b}")
             for u in self.afud
-            for b in self.chi_b_indices
+            for b in self.ln_indices
         }
         return ret
 
     def gen_length_vars(self):
-        self.length_b_indices = list(range(math.floor(math.log2(self.ln))))
         self.length_vars = ret = {
             (u, v, b): aiger.atom(f"len_{u}->{v}_{b}")
-            for b in self.length_b_indices
+            for b in self.lln_indices
             for u, v in distinct2(self.afud)
             if v != self.v_star
         }
@@ -117,13 +118,67 @@ class Conditions:
 
     def gen_same_bit_vars(self):
         """For LocCheckSize(Dec/Diff)"""
-        self.samebitvars = {(u, v, b): aiger.atom(f"samebit_{u}_{v}_{b}")
-                            for b in self.chi_b_indices for u, v in distinct2(self.afud)}
-        samebitclauses = all_(all_(self.samebitvars[u, v, b] == ((self.chi_vars[u, b] & self.chi_vars[v, b])
-                                                                 | (~self.chi_vars[u, b] & ~self.chi_vars[v, b]))
-                                   for b in self.chi_b_indices)
-                              for u, v in distinct2(self.afud))
-        return samebitclauses
+        self.same_bit_vars = ret = {(u, v, b): aiger.atom(f"samebit_{u}_{v}_{b}")
+                                    for b in self.ln_indices for u, v in distinct2(self.afud)}
+        same_bit_clauses = all_(all_(self.same_bit_vars[u, v, b] == ((self.chi_vars[u, b] & self.chi_vars[v, b])
+                                                                     | (~self.chi_vars[u, b] & ~self.chi_vars[v, b]))
+                                     for b in self.ln_indices)
+                                for u, v in distinct2(self.afud))
+        return ret, same_bit_clauses
+
+    def gen_w_vars(self):
+        """For LocCheckPath. Represents chi"""
+        self.w_vars = ret = {(v, b): aiger.atom(f"w_{v}_{b}")
+                             for b in self.lln_indices for v in self.afud}
+        w_clauses = all_(all_(self.chi_vars[v, b].implies(all_(
+                                  self.w_vars[v, i] if ((b >> i) & 1) == 1 else ~self.w_vars[v, i]
+                                  for i in self.lln_indices
+                              ))
+                              for b in self.ln_indices)
+                         for v in self.afud)
+        return ret, w_clauses
+
+    # noinspection PyTypeChecker
+    def gen_y_vars(self):
+        """For LocCheckPath. Represents chi + l"""
+        self.y_vars = y_vars = {(u, v, b): aiger.atom(f"y_{u}_{v}_{b}")
+                                for b in self.lln_indices + [self.lln]
+                                for u, v in distinct2(self.afud)
+                                if v != self.v_star}
+        c_vars = {(u, v, b): aiger.atom(f"c_{u}_{v}_{b}")
+                  for b in self.lln_indices[:-1]
+                  for u, v in distinct2(self.afud)
+                  if v != self.v_star}
+        c_clauses = all_(
+            (c_vars[u, v, 0] == (self.w_vars[v, 0] & self.length_vars[u, v, 0])) &
+            all_(
+                c_vars[u, v, b] == (
+                    # at least 2
+                    (self.w_vars[v, b] & self.length_vars[u, v, b]) |
+                    (self.w_vars[v, b] & c_vars[u, v, b - 1]) |
+                    (c_vars[u, v, b - 1] & self.length_vars[u, v, b])
+                )
+                for b in self.lln_indices[1:-1]
+            )
+            for u, v in distinct2(self.afud)
+            if v != self.v_star
+        )
+        y_clauses = all_(
+            (y_vars[u, v, 0] == (self.w_vars[v, 0] ^ self.length_vars[u, v, 0])) &
+            all_(
+                y_vars[u, v, b] == (
+                    # exactly 1
+                    (self.w_vars[v, b] ^ self.length_vars[u, v, b] ^ c_vars[u, v, b - 1]) |
+                    # or exactly 3
+                    (self.w_vars[v, b] & self.length_vars[u, v, b] & c_vars[u, v, b - 1])
+                )
+                for b in self.lln_indices[1:]
+            ) &
+            (y_vars[u, v, self.lln] == self.w_vars[v, self.lln - 1] & self.length_vars[u, v, self.lln - 1])
+            for u, v in distinct2(self.afud)
+            if v != self.v_star
+        )
+        return y_vars, c_clauses & y_clauses
 
     # g vars
 
@@ -138,7 +193,7 @@ class Conditions:
 
     def exactly_one_size_bit(self, u):
         assert u in self.afud
-        return exactly_one(self.chi_vars[u, b] for b in self.chi_b_indices)
+        return exactly_one(self.chi_vars[u, b] for b in self.ln_indices)
 
     def at_most_one_dist(self, u):
         assert u in self.afuddv
@@ -210,21 +265,24 @@ class Conditions:
         # for u, v in distinct2(afud) if v != v_star  # possibly should just be false for v_star
         assert u in self.afud and v in self.afud and u != v
         return (self.is_arc(u, v) & (aiger.atom(True) if u in self.a_f else self.in_closure(u))
-                ).implies(all_(~self.length_vars[u, v, b] for b in self.length_b_indices))
+                ).implies(all_(~self.length_vars[u, v, b] for b in self.lln_indices))
 
     def loc_check_size_dec(self, u, v):
         assert u in self.afud and v in self.afud and u != v
         return self.is_arc(u, v).implies(
-            at_least_one(all_(self.samebitvars[u, v, i] for i in self.chi_b_indices if i > b)  # largest condition
-                         & ~self.samebitvars[u, v, b] & self.chi_vars[u, b] & ~self.chi_vars[v, b]
-                         for b in self.chi_b_indices)
+            at_least_one(all_(self.same_bit_vars[u, v, i] for i in self.ln_indices if i > b)  # largest condition
+                         & ~self.same_bit_vars[u, v, b] & self.chi_vars[u, b] & ~self.chi_vars[v, b]
+                         for b in self.ln_indices)
         )
 
     def loc_check_size_diff(self, u, v, w):
         assert u in self.afud and v in self.afud and w in self.afud
         return (self.is_arc(u, v) & self.is_arc(u, w)).implies(
-            ~all_(self.samebitvars[v, w, b] for b in self.chi_b_indices)
+            ~all_(self.same_bit_vars[v, w, b] for b in self.ln_indices)
         )
+
+    def loc_check_path(self, u, v):
+        pass
 
     # realizable = aiger.atom(True)
     # realizable &= chi_vars[v_star, D.ln]
@@ -233,9 +291,6 @@ class Conditions:
     # s.add_expr(realizable)
     # m = s.get_model()
     # print(m)
-    # print(*afud)
-    # for b in chi_b_indices:
-    #     print(*(1 if m[f"chi_{u}_{b}"] else 0 for u in afud))
     # return s.is_sat()
 
 def solve(graph):
