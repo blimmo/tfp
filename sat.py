@@ -4,13 +4,14 @@ import operator
 from functools import reduce
 
 import aiger
+import aiger_sat
 
 
 def at_most_one(literals):
     return reduce(operator.and_, (~a | ~b for a, b in itertools.combinations(literals, 2)))
 
 def at_least_one(literals):
-    return reduce(operator.or_, literals)
+    return reduce(operator.or_, literals, aiger.atom(False))
 
 def exactly_one(literals):
     literals = list(literals)
@@ -36,17 +37,17 @@ def solve_one(graph, v_star):
             tau[v] = len(num) - 1
             num[-1] += 1
     num = tuple(num)
-    typesaf = tuple(range(len(num)))
+    naftypes = tuple(range(len(num)))
     types = tuple(i / 2 for i in range(2 * len(a_f) + 1))
 
-    dummy_size = 4 * (2 * len(a_f) + 1) - len(a_f)
+    dummy_size = min(4 * (2 * len(graph.feedback) + 1), graph.n) - len(a_f)  # maybe 4 * len(a_f)?
     dummy = {-i for i in range(1, dummy_size + 1)}
-    cond = Conditions.make(graph, v_star, v_f, a_f, dummy, typesaf, tau)
+    return Conditions.make(graph, v_star, v_f, a_f, dummy, naftypes, tau).solve() is not None
 
 
 class Conditions:
     def __init__(self, graph=None, ln=None, v_star=None, v_f=None, a_f=None, dummy=None,
-                 typesaf=None, tau=None, afud=None, afuddv=None):
+                 naftypes=None, tau=None, afud=None, afuddv=None):
         self.graph = graph
         self.ln = ln
         if ln is not None:
@@ -57,21 +58,34 @@ class Conditions:
         self.v_f = v_f
         self.a_f = a_f
         self.dummy = dummy
-        self.typesaf = typesaf
+        self.naftypes = naftypes
         self.tau = tau
         self.afud = afud
         self.afuddv = afuddv
+        self.afud_and_pairs = afud.union(itertools.product(afud, repeat=2))
+        self.variable_clauses = aiger.atom(True)
 
     @classmethod
     def make(cls, graph, v_star, v_f, a_f, dummy, typesaf, tau):
         afud = a_f.union(dummy)
         ins = cls(graph, graph.ln, v_star, v_f, a_f, dummy, typesaf, tau, afud,
                   afud.difference({v_star}))
+        print("l")
         ins.gen_l_vars()
+        print("psi")
         ins.gen_psi_vars()
+        print("chi")
         ins.gen_chi_vars()
+        print("len")
         ins.gen_length_vars()
+        print("dist")
         ins.gen_dist_vars()
+        print("same bit")
+        ins.gen_same_bit_vars()
+        print("w")
+        ins.gen_w_vars()
+        print("y")
+        ins.gen_y_vars()
         return ins
 
     def gen_l_vars(self):
@@ -86,7 +100,7 @@ class Conditions:
         self.psi_vars = ret = {
             (u, i): aiger.atom(f"psi_{u}<={i}")
             for u in self.dummy
-            for i in self.typesaf
+            for i in self.naftypes
         }
         return ret
 
@@ -114,29 +128,38 @@ class Conditions:
             for u in self.afuddv
             for d in self.dist_b_indices
         }
+        self.variable_clauses &= all_(all_(self.verify_dist(u, d) for u in self.v_f) for d in self.dist_b_indices)
         return ret
+
+    def gen_g_vars(self):
+        self.g_vars = {
+            (e, i, b): aiger.atom(f"g_{e}_{i}_{b}")
+            for e in self.afud_and_pairs
+            for i in self.naftypes
+            for b in self.ln_indices
+        }
 
     def gen_same_bit_vars(self):
         """For LocCheckSize(Dec/Diff)"""
-        self.same_bit_vars = ret = {(u, v, b): aiger.atom(f"samebit_{u}_{v}_{b}")
-                                    for b in self.ln_indices for u, v in distinct2(self.afud)}
-        same_bit_clauses = all_(all_(self.same_bit_vars[u, v, b] == ((self.chi_vars[u, b] & self.chi_vars[v, b])
-                                                                     | (~self.chi_vars[u, b] & ~self.chi_vars[v, b]))
-                                     for b in self.ln_indices)
-                                for u, v in distinct2(self.afud))
-        return ret, same_bit_clauses
+        self.same_bit_vars = same_bit_vars = {(u, v, b): aiger.atom(f"samebit_{u}_{v}_{b}")
+                                              for b in self.ln_indices for u, v in distinct2(self.afud)}
+        self.variable_clauses &= all_(all_(same_bit_vars[u, v, b] == ((self.chi_vars[u, b] & self.chi_vars[v, b])
+                                                                | (~self.chi_vars[u, b] & ~self.chi_vars[v, b]))
+                                           for b in self.ln_indices)
+                                      for u, v in distinct2(self.afud))
+        return same_bit_vars
 
     def gen_w_vars(self):
         """For LocCheckPath. Represents chi"""
-        self.w_vars = ret = {(v, b): aiger.atom(f"w_{v}_{b}")
-                             for b in self.lln_indices for v in self.afud}
-        w_clauses = all_(all_(self.chi_vars[v, b].implies(all_(
-                                  self.w_vars[v, i] if ((b >> i) & 1) == 1 else ~self.w_vars[v, i]
-                                  for i in self.lln_indices
-                              ))
-                              for b in self.ln_indices)
-                         for v in self.afud)
-        return ret, w_clauses
+        self.w_vars = w_vars = {(v, b): aiger.atom(f"w_{v}_{b}")
+                                for b in self.lln_indices for v in self.afud}
+        self.variable_clauses &= all_(all_(self.chi_vars[v, b].implies(all_(
+                                               w_vars[v, i] if ((b >> i) & 1) == 1 else ~w_vars[v, i]
+                                               for i in self.lln_indices
+                                           ))
+                                           for b in self.ln_indices)
+                                      for v in self.afud)
+        return w_vars
 
     # noinspection PyTypeChecker
     def gen_y_vars(self):
@@ -178,7 +201,8 @@ class Conditions:
             for u, v in distinct2(self.afud)
             if v != self.v_star
         )
-        return y_vars, c_clauses & y_clauses
+        self.variable_clauses &= c_clauses & y_clauses
+        return y_vars
 
     # g vars
 
@@ -189,7 +213,7 @@ class Conditions:
 
     def exactly_one_type(self, u):
         assert u in self.dummy
-        return exactly_one(self.psi_vars[u, i] for i in self.typesaf)
+        return exactly_one(self.psi_vars[u, i] for i in self.naftypes)
 
     def exactly_one_size_bit(self, u):
         assert u in self.afud
@@ -204,14 +228,13 @@ class Conditions:
         return at_least_one(self.dist_vars[u, d] for d in self.dist_b_indices)
 
     def verify_dist(self, u, d):
-        # for u in v_f:
-        # VerifyDist_d(u)
+        assert u in self.v_f and d in self.dist_b_indices
         if d == 1:
-            return self.dist_vars[u, d].implies(self.l_vars[self.v_star, u])
-        return self.dist_vars[u, d].implies(at_least_one(
+            return self.dist_vars[u, d] == self.l_vars[self.v_star, u]
+        return self.dist_vars[u, d] == at_least_one(
             self.l_vars[w, u] & self.dist_vars[w, d - 1]
             for w in self.afuddv if w != u
-        ))
+        )
 
     def reachable(self, u):
         assert u in self.dummy
@@ -237,11 +260,11 @@ class Conditions:
             else:
                 return aiger.atom(False)
         if u in self.a_f:
-            return at_least_one(self.psi_vars[v, i] for i in self.typesaf if i > self.tau[u])
+            return at_least_one(self.psi_vars[v, i] for i in self.naftypes if i > self.tau[u])
         if v in self.a_f:
-            return at_least_one(self.psi_vars[u, i] for i in self.typesaf if i > self.tau[v])
+            return at_least_one(self.psi_vars[u, i] for i in self.naftypes if i > self.tau[v])
         return at_least_one(self.psi_vars[u, i] & self.psi_vars[v, j]
-                            for i, j in itertools.combinations(reversed(self.typesaf), 2))
+                            for i, j in itertools.combinations(reversed(self.naftypes), 2))
 
     def if_arc_then_valid(self, u, v):
         assert u in self.afud and v in self.afud and u != v
@@ -262,8 +285,11 @@ class Conditions:
         return (self.is_arc(u, v) & self.child_of_closure(u)).implies(self.child_of_closure(v))
 
     def loc_check_len_sensible(self, u, v):
-        # for u, v in distinct2(afud) if v != v_star  # possibly should just be false for v_star
+        # for u, v in distinct2(afud) if v != v_star  # possibly should just be false/true for v_star
         assert u in self.afud and v in self.afud and u != v
+        if v == self.v_star:
+            # no arcs to v_star so implies short circuits
+            return aiger.atom(True)
         return (self.is_arc(u, v) & (aiger.atom(True) if u in self.a_f else self.in_closure(u))
                 ).implies(all_(~self.length_vars[u, v, b] for b in self.lln_indices))
 
@@ -271,7 +297,7 @@ class Conditions:
         assert u in self.afud and v in self.afud and u != v
         return self.is_arc(u, v).implies(
             at_least_one(all_(self.same_bit_vars[u, v, i] for i in self.ln_indices if i > b)  # largest condition
-                         & ~self.same_bit_vars[u, v, b] & self.chi_vars[u, b] & ~self.chi_vars[v, b]
+                         & self.chi_vars[u, b] & ~self.chi_vars[v, b]  # & ~self.same_bit_vars[u, v, b] ?
                          for b in self.ln_indices)
         )
 
@@ -282,19 +308,77 @@ class Conditions:
         )
 
     def loc_check_path(self, u, v):
-        pass
+        assert u in self.afud and v in self.afud and u != v
+        if v == self.v_star:
+            # no arcs to v_star so implies short circuits
+            return aiger.atom(True)
+        if u not in self.dummy:
+            return aiger.atom(False)
+        same_bit_vars = [aiger.atom(f"same_{u}_{v}_{b}") for b in self.lln_indices]
+        same_clauses = all_(same_bit_vars[b] == ((self.w_vars[u, b] & self.y_vars[u, v, b])
+                                                 | (~self.w_vars[u, b] & ~self.y_vars[u, v, b]))
+                            for b in self.lln_indices)
+        return (self.is_arc(u, v) & self.child_of_closure(u)).implies(
+            # all_(same_bit_vars) |  # equal
+            at_least_one(all_(same_bit_vars[i] for i in self.lln_indices if i > b)  # largest condition
+                         & self.w_vars[u, b] & ~self.y_vars[u, v, b]
+                         for b in self.lln_indices)
+        ) & same_clauses
 
-    # realizable = aiger.atom(True)
-    # realizable &= chi_vars[v_star, D.ln]
-    #
-    # s = aiger_sat.SolverWrapper()
-    # s.add_expr(realizable)
-    # m = s.get_model()
-    # print(m)
-    # return s.is_sat()
+    def realizable(self):
+        return (
+            self.variable_clauses
+            # (i) Validity
+            & all_(self.at_most_one_parent(u) for u in self.afuddv)
+            & all_(self.exactly_one_type(u) for u in self.dummy)
+            & all_(self.exactly_one_size_bit(u) for u in self.afud)
+            & self.chi_vars[self.v_star, self.ln]
+            & all_(self.at_most_one_dist(u) for u in self.afuddv)
+            & all_(self.at_least_one_dist(u) for u in self.v_f)
+            & all_(all_(self.verify_dist(u, d) for u in self.v_f) for d in self.dist_b_indices)
+            & all_(self.reachable(u) for u in self.dummy)
+            & all_(self.not_leaf(u) for u in self.dummy)
+            # (ii)
+            & all_(self.if_arc_then_valid(u, v)
+                   & self.loc_check_len_sensible(u, v)
+                   & self.loc_check_size_dec(u, v)
+                   & self.loc_check_path(u, v)
+                   for u, v in distinct2(self.afud))
+            # (iii)
+            & all_(self.loc_check_size_diff(u, v, w)
+                   for u, v, w in itertools.permutations(self.afud, 3))
+        )
+
+    # def packing_node_sum(self, u):
+
+    def packing_node_type(self, u, t):
+        # what about u in a_f?
+        assert u in self.dummy and t in self.naftypes
+        return at_least_one(self.g_vars[u, t, b] for b in self.ln_indices).implies(
+            at_least_one(self.psi_vars[u, i] for i in self.naftypes if i >= t))
+
+    def packing_node_self(self, u):
+        assert u in self.afud
+        if u in self.a_f:
+            # psi(u) isn't defined but it doesn't matter
+            return aiger.atom(True)
+        return all_(self.psi_vars[u, i].implies(
+            at_least_one(self.g_vars[u, i, b] for b in self.ln_indices)
+        ) for i in self.naftypes)
+
+    def packable(self):
+        return (
+            # 1.
+            all_(  # self.packing_node_sum(u)
+                 all_(self.packing_node_type(u, t) for t in self.naftypes)
+                 & all_(self.packing_node_self(u))
+                 for u in self.afud)
+        )
+
+    def solve(self):
+        r = self.realizable()
+        print(r)
+        return aiger_sat.solve(r)
 
 def solve(graph):
     return {v for v in (1,) if solve_one(graph, v)}
-
-# if __name__ == "__main__":
-#     solve_one(G)
