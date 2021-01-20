@@ -4,7 +4,7 @@ from pprint import pprint, pformat
 
 import aiger_sat
 
-from sat import Conditions, all_
+from sat import Conditions, all_, solve_expr, new_var
 
 
 def switch_ith(a, i):
@@ -183,9 +183,9 @@ class Test(unittest.TestCase):
         cond.gen_y_vars()
         u, v = 0, 1
         for chi_v, l_u_v in itertools.product(cond.ln_indices, repeat=2):
-            with self.subTest(chi_v=chi_v, l_u_v=l_u_v):
-                ws = val_to_encode(chi_v, lambda x: wv[v, x], cond.lln_indices)
-                ls = val_to_encode(l_u_v, lambda x: length[u, v, x], cond.lln_indices)
-                result = aiger_sat.solve(cond.variable_clauses & all_(ws + ls))
-                self.assertEqual(encode_to_val(lambda x: result[f"y_{u}_{v}_{x}"], cond.lln_indices + [cond.lln]),
-                                 chi_v + l_u_v)
+            # with self.subTest(chi_v=chi_v, l_u_v=l_u_v):
+            ws = val_to_encode(chi_v, lambda x: wv[v][x], cond.lln_indices)
+            ls = val_to_encode(l_u_v, lambda x: length[u, v][x], cond.lln_indices)
+            result = solve_expr(cond.variable_clauses & all_(ws + ls))
+            self.assertEqual(encode_to_val(lambda x: result[new_var(f"chi+l_u:{u}_v:{v}_b:{x}")], cond.lln_indices + [cond.lln]),
+                             chi_v + l_u_v)
