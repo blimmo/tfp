@@ -69,7 +69,7 @@ class Conditions:
         self.num = num
         self.afud = afud
         self.afuddv = afuddv
-        self.afud_and_pairs = afud.union(itertools.product(afud, repeat=2))
+        self.afud_and_pairs = afud.union(distinct2(afud))
         self.variable_clauses = true
 
     @classmethod
@@ -354,8 +354,15 @@ class Conditions:
                             at_least_one(self.g_vars[u, i][b] for b in self.ln_indices)
         ) for i in self.naftypes)
 
-    # def packing_arc_sum(self, a):
-        # u, v = a
+    def packing_arc_sum(self, a):
+        u, v = a
+        i = iter(self.naftypes)
+        lhs = self.g_vars[a, next(i)]
+        for j, t in enumerate(i):
+            lhs = self.sum(lhs, self.g_vars[a, t] + [false] * j, f"pas:{a}_{t}")
+        return all_(
+            equivalent(lv, rv) for lv, rv in zip(lhs, self.length_vars[u, v])
+        )
 
     def packing_arc_type(self, a, t):
         u, v = a
@@ -369,7 +376,7 @@ class Conditions:
         i = iter(self.afud_and_pairs)
         lhs = self.g_vars[next(i), t]
         for j, e in enumerate(i):
-            lhs = self.sum(lhs, self.g_vars[e, t] + [false] * j, f"pts:{e}")
+            lhs = self.sum(lhs, self.g_vars[e, t] + [false] * j, f"pts:{e}_{t}")
         return all_(
             v if ((self.num[t] >> b) & 1) == 1 else ~v for b, v in enumerate(lhs)
         )
@@ -382,9 +389,9 @@ class Conditions:
                  & self.packing_node_self(u)
                  for u in self.afud)
             # 2.
-            & all_(  # self.packing_arc_sum(a)
-                   all_(self.packing_arc_type(a, t) for t in self.naftypes)
-                   for a in itertools.product(self.afud, repeat=2))
+            & all_(self.packing_arc_sum(a)
+                   & all_(self.packing_arc_type(a, t) for t in self.naftypes)
+                   for a in distinct2(self.afud) if a[1] != self.v_star)
             # 3.
             & all_(self.packing_type_sum(t) for t in self.naftypes)
         )
