@@ -3,8 +3,6 @@ import math
 import operator
 from functools import reduce
 
-import aiger
-import aiger_sat
 import sympy
 
 # shims
@@ -50,12 +48,12 @@ def solve_one(graph, v_star):
 
     dummy_size = min(4 * (2 * len(graph.feedback) + 1), graph.n) - len(a_f)  # maybe 4 * len(a_f)?
     dummy = {-i for i in range(1, dummy_size + 1)}
-    return Conditions.make(graph, v_star, v_f, a_f, dummy, naftypes, tau).solve() is not None
+    return Conditions.make(graph, v_star, v_f, a_f, dummy, naftypes, tau, num).solve() is not None
 
 
 class Conditions:
     def __init__(self, graph=None, ln=None, v_star=None, v_f=None, a_f=None, dummy=None,
-                 naftypes=None, tau=None, afud=None, afuddv=None):
+                 naftypes=None, tau=None, num=None, afud=None, afuddv=None):
         self.graph = graph
         self.ln = ln
         if ln is not None:
@@ -68,33 +66,27 @@ class Conditions:
         self.dummy = dummy
         self.naftypes = naftypes
         self.tau = tau
+        self.num = num
         self.afud = afud
         self.afuddv = afuddv
         self.afud_and_pairs = afud.union(itertools.product(afud, repeat=2))
         self.variable_clauses = true
 
     @classmethod
-    def make(cls, graph, v_star, v_f, a_f, dummy, typesaf, tau):
+    def make(cls, graph, v_star, v_f, a_f, dummy, typesaf, tau, num):
         afud = a_f.union(dummy)
-        ins = cls(graph, graph.ln, v_star, v_f, a_f, dummy, typesaf, tau, afud,
-                  afud.difference({v_star}))
-        print("l")
+        ins = cls(graph, graph.ln, v_star, v_f, a_f, dummy, typesaf, tau, num,
+                  afud, afud.difference({v_star}))
         ins.gen_l_vars()
-        print("psi")
         ins.gen_psi_vars()
-        print("chi")
         ins.gen_chi_vars()
-        print("len")
         ins.gen_length_vars()
-        print("dist")
         ins.gen_dist_vars()
-        print("same bit")
         ins.gen_same_bit_vars()
-        print("w")
         ins.gen_w_vars()
-        print("y")
         ins.gen_y_vars()
         ins.gen_g_vars()
+        print("generated vars")
         return ins
 
     def gen_l_vars(self):
@@ -214,7 +206,7 @@ class Conditions:
     def verify_dist(self, u, d):
         assert u in self.v_f and d in self.dist_b_indices
         if d == 1:
-            return self.dist_vars[u, d] == self.l_vars[self.v_star, u]
+            return equivalent(self.dist_vars[u, d], self.l_vars[self.v_star, u])
         return equivalent(self.dist_vars[u, d], at_least_one(
             self.l_vars[w, u] & self.dist_vars[w, d - 1]
             for w in self.afuddv if w != u
@@ -367,11 +359,20 @@ class Conditions:
 
     def packing_arc_type(self, a, t):
         u, v = a
-        return implies(at_least_one(self.g_vars[u, t][b] for b in self.ln_indices),
-            self.types_beats(u, t, True) & self.types_beats(v, t, False))
+        return implies(
+            at_least_one(self.g_vars[u, t][b] for b in self.ln_indices),
+            self.types_beats(u, t, True) & self.types_beats(v, t, False)
+        )
         # strict inequalities?
 
-    # def packing_type_sum(self, t):
+    def packing_type_sum(self, t):
+        i = iter(self.afud_and_pairs)
+        lhs = self.g_vars[next(i), t]
+        for j, e in enumerate(i):
+            lhs = self.sum(lhs, self.g_vars[e, t] + [false] * j, f"pts:{e}")
+        return all_(
+            v if ((self.num[t] >> b) & 1) == 1 else ~v for b, v in enumerate(lhs)
+        )
 
     def packable(self):
         return (
@@ -385,7 +386,7 @@ class Conditions:
                    all_(self.packing_arc_type(a, t) for t in self.naftypes)
                    for a in itertools.product(self.afud, repeat=2))
             # 3.
-
+            & all_(self.packing_type_sum(t) for t in self.naftypes)
         )
 
     def solve(self):
