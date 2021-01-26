@@ -187,5 +187,5 @@ class Test(unittest.TestCase):
             ws = val_to_encode(chi_v, lambda x: wv[v][x], cond.lln_indices)
             ls = val_to_encode(l_u_v, lambda x: length[u, v][x], cond.lln_indices)
             result = solve_expr(cond.variable_clauses & all_(ws + ls))
-            self.assertEqual(encode_to_val(lambda x: result[new_var(f"chi+l_u:{u}_v:{v}_b:{x}")], cond.lln_indices + [cond.lln]),
+            self.assertEqual(encode_to_val(lambda x: result[new_var(f"chi+l_u:{u}_v:{v}_b:{x}")], cond.lln_indices),
                              chi_v + l_u_v)

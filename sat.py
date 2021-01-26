@@ -139,6 +139,7 @@ class Conditions:
 
     def gen_same_bit_vars(self):
         """For LocCheckSize(Dec/Diff)"""
+        # TODO: Generalise same
         self.same_bit_vars = same_bit_vars = {(u, v): [new_var(f"samebit_{u}_{v}_{b}") for b in self.ln_indices]
                                               for u, v in distinct2(self.afud)}
         self.variable_clauses &= all_(all_(equivalent(same_bit_vars[u, v][b], ((self.chi_vars[u][b] & self.chi_vars[v][b])
@@ -154,23 +155,27 @@ class Conditions:
         self.variable_clauses &= all_(all_(implies(self.chi_vars[v][b], (all_(
                                                w_vars[v][i] if ((b >> i) & 1) == 1 else ~w_vars[v][i]
                                                for i in self.lln_indices
-                                           )))
+                                           )))  # maybe equivalent?
                                            for b in self.ln_indices)
                                       for v in self.afud)
         return w_vars
 
     def sum(self, x, y, prefix):
-        assert len(x) == len(y)
-        indices = list(range(len(x) + 1))  # 1 extra bit for carries
+        # assert len(x) == len(y)
+        if len(x) < len(y):
+            x = x + [false] * (len(y) - len(x))
+        elif len(y) < len(x):
+            y = y + [false] * (len(x) - len(y))
+        indices = list(range(len(x)))
         result_vars = [new_var(f"{prefix}_b:{b}") for b in indices]
-        c = [new_var(f"{prefix}_carry:{b}") for b in indices[:-1]]  # final bit can't carry
+        c = [new_var(f"{prefix}_carry:{b}") for b in indices]
         c_clauses = equivalent(c[0], (x[0] & y[0]))  # first carry doesn't consider previous ones
         c_clauses &= all_(equivalent(c[b], ((x[b] & y[b]) | (x[b] & c[b - 1]) | (y[b] & c[b - 1])))
-                          for b in indices[1:-1])
+                          for b in indices[1:])
         result_clauses = equivalent(result_vars[0], (x[0] ^ y[0]))
         result_clauses &= all_(equivalent(result_vars[b], (x[b] ^ y[b] ^ c[b - 1]))
-                               for b in indices[1:-1])
-        result_clauses &= equivalent(result_vars[-1], c[-1])
+                               for b in indices[1:])
+        result_clauses &= equivalent(c[-1], false)
         self.variable_clauses &= c_clauses & result_clauses
         return result_vars
 
@@ -332,7 +337,21 @@ class Conditions:
                    for u, v, w in itertools.permutations(self.afud, 3))
         )
 
-    # def packing_node_sum(self, u):
+    def packing_node_sum(self, u):
+        i = iter(self.naftypes)
+        lhs = self.g_vars[u, next(i)]
+        for t in i:
+            lhs = self.sum(lhs, self.g_vars[u, t], f"pnslhs:{u}_{t}")
+        for v in self.afuddv:
+            if v == u:
+                continue
+            belowv = self.sum(self.chi_vars[v], self.length_vars[u, v], f"chi({v})+l({u})")
+            lhs = self.sum(
+                lhs,
+                [self.l_vars[u, v] & var for var in belowv],
+                f"pnslhs2:{u}_{v}"
+            )
+        return all_(equivalent(lv, rv) for lv, rv in zip(lhs, self.chi_vars[u]))
 
     def types_beats(self, u, threshold, u_wins):
         comp = operator.le if u_wins else operator.ge
@@ -359,7 +378,7 @@ class Conditions:
         i = iter(self.naftypes)
         lhs = self.g_vars[a, next(i)]
         for j, t in enumerate(i):
-            lhs = self.sum(lhs, self.g_vars[a, t] + [false] * j, f"pas:{a}_{t}")
+            lhs = self.sum(lhs, self.g_vars[a, t], f"pas:{a}_{t}")
         return all_(
             equivalent(lv, rv) for lv, rv in zip(lhs, self.length_vars[u, v])
         )
@@ -376,7 +395,7 @@ class Conditions:
         i = iter(self.afud_and_pairs)
         lhs = self.g_vars[next(i), t]
         for j, e in enumerate(i):
-            lhs = self.sum(lhs, self.g_vars[e, t] + [false] * j, f"pts:{e}_{t}")
+            lhs = self.sum(lhs, self.g_vars[e, t], f"pts:{e}_{t}")
         return all_(
             v if ((self.num[t] >> b) & 1) == 1 else ~v for b, v in enumerate(lhs)
         )
@@ -384,8 +403,8 @@ class Conditions:
     def packable(self):
         return (
             # 1.
-            all_(  # self.packing_node_sum(u)
-                 all_(self.packing_node_type(u, t) for t in self.naftypes)
+            all_(self.packing_node_sum(u)
+                 & all_(self.packing_node_type(u, t) for t in self.naftypes)
                  & self.packing_node_self(u)
                  for u in self.afud)
             # 2.
