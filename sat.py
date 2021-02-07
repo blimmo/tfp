@@ -2,6 +2,7 @@ import itertools
 import math
 import operator
 from functools import reduce
+from pprint import pprint
 
 import sympy
 
@@ -14,7 +15,7 @@ false = sympy.false
 solve_expr = sympy.logic.inference.satisfiable
 
 def at_most_one(literals):
-    return reduce(operator.and_, (~a | ~b for a, b in itertools.combinations(literals, 2)))
+    return reduce(operator.and_, (~a | ~b for a, b in itertools.combinations(literals, 2)), true)
 
 def at_least_one(literals):
     return reduce(operator.or_, literals, false)
@@ -27,9 +28,27 @@ def all_(literals):
     return reduce(operator.and_, literals, true)
 
 def distinct2(s):
-    return list(itertools.permutations(s, 2))
+    return tuple(itertools.permutations(s, 2))
+
+def check(expr):
+    result = solve_expr(expr)
+    if result is False:
+        # print(expr)
+        raise Exception
+    return expr
+
+def pretty(result):
+    pprint(list(item for item in sorted(result.items(), key=lambda i: str(i[0]))
+                if ("L_" in str(item[0]))
+                or ("psi_" in str(item[0]))
+                or ("chi_" in str(item[0]))
+                or ("len_" in str(item[0]))
+                or ("g_" in str(item[0]))
+                # or ("dist_" in str(item[0]))
+                ))
 
 def solve_one(graph, v_star):
+    print(f"v_star = {v_star}")
     v_f = frozenset(sum(graph.feedback, start=()))
     a_f = v_f.union((v_star,))
 
@@ -46,10 +65,16 @@ def solve_one(graph, v_star):
     naftypes = tuple(range(len(num)))
     types = tuple(i / 2 for i in range(2 * len(a_f) + 1))
 
-    dummy_size = min(4 * (2 * len(graph.feedback) + 1), graph.n) - len(a_f)  # maybe 4 * len(a_f)?
-    dummy = {-i for i in range(1, dummy_size + 1)}
-    return Conditions.make(graph, v_star, v_f, a_f, dummy, naftypes, tau, num).solve() is not None
-
+    max_dummy_size = min(4 * (2 * len(graph.feedback) + 1), graph.n) - len(a_f)  # maybe 4 * len(a_f)?
+    for dummy_size in range(max_dummy_size + 1):
+        print(f"dummy_size = {dummy_size}")
+        dummy = {-i for i in range(1, dummy_size + 1)}
+        cond = Conditions.make(graph, v_star, v_f, a_f, dummy, naftypes, tau, num)
+        result = cond.solve()
+        if result is not False:
+            pretty(result)
+            return True
+    return False
 
 class Conditions:
     def __init__(self, graph=None, ln=None, v_star=None, v_f=None, a_f=None, dummy=None,
@@ -86,7 +111,6 @@ class Conditions:
         ins.gen_w_vars()
         ins.gen_y_vars()
         ins.gen_g_vars()
-        print("generated vars")
         return ins
 
     def gen_l_vars(self):
@@ -127,7 +151,7 @@ class Conditions:
             for u in self.afuddv
             for d in self.dist_b_indices
         }
-        self.variable_clauses &= all_(all_(self.verify_dist(u, d) for u in self.v_f) for d in self.dist_b_indices)
+        # self.variable_clauses &= all_(all_(self.verify_dist(u, d) for u in self.v_f) for d in self.dist_b_indices)
         return ret
 
     def gen_g_vars(self):
@@ -205,11 +229,11 @@ class Conditions:
         return at_most_one(self.dist_vars[u, d] for d in self.dist_b_indices)
 
     def at_least_one_dist(self, u):
-        assert u in self.v_f
+        assert u in self.afuddv
         return at_least_one(self.dist_vars[u, d] for d in self.dist_b_indices)
 
     def verify_dist(self, u, d):
-        assert u in self.v_f and d in self.dist_b_indices
+        assert u in self.afuddv and d in self.dist_b_indices
         if d == 1:
             return equivalent(self.dist_vars[u, d], self.l_vars[self.v_star, u])
         return equivalent(self.dist_vars[u, d], at_least_one(
@@ -315,15 +339,15 @@ class Conditions:
 
     def realizable(self):
         return (
-            self.variable_clauses
+            # self.variable_clauses
             # (i) Validity
-            & all_(self.at_most_one_parent(u) for u in self.afuddv)
+            all_(self.at_most_one_parent(u) for u in self.afuddv)
             & all_(self.exactly_one_type(u) for u in self.dummy)
             & all_(self.exactly_one_size_bit(u) for u in self.afud)
             & self.chi_vars[self.v_star][self.ln]
             & all_(self.at_most_one_dist(u) for u in self.afuddv)
-            & all_(self.at_least_one_dist(u) for u in self.v_f)
-            & all_(all_(self.verify_dist(u, d) for u in self.v_f) for d in self.dist_b_indices)
+            & all_(self.at_least_one_dist(u) for u in self.afuddv)
+            & all_(all_(self.verify_dist(u, d) for u in self.afuddv) for d in self.dist_b_indices)
             & all_(self.reachable(u) for u in self.dummy)
             & all_(self.not_leaf(u) for u in self.dummy)
             # (ii)
@@ -338,9 +362,9 @@ class Conditions:
         )
 
     def packing_node_sum(self, u):
-        i = iter(self.naftypes)
-        lhs = self.g_vars[u, next(i)]
-        for t in i:
+        assert u in self.afud
+        lhs = [true if u in self.a_f else false]  # u itself is counted in chi
+        for t in self.naftypes:
             lhs = self.sum(lhs, self.g_vars[u, t], f"pnslhs:{u}_{t}")
         for v in self.afuddv:
             if v == u:
@@ -354,11 +378,13 @@ class Conditions:
         return all_(equivalent(lv, rv) for lv, rv in zip(lhs, self.chi_vars[u]))
 
     def types_beats(self, u, threshold, u_wins):
+        # strict inequalities?
         comp = operator.le if u_wins else operator.ge
         if u in self.dummy:
             return at_least_one(self.psi_vars[u, i] for i in self.naftypes if comp(i, threshold))
         else:  # u in self.a_f
             return true if comp(self.tau[u], threshold) else false
+        #  and self.num[threshold] > 0 ?
 
     def packing_node_type(self, u, t):
         assert u in self.afud and t in self.naftypes
@@ -386,10 +412,9 @@ class Conditions:
     def packing_arc_type(self, a, t):
         u, v = a
         return implies(
-            at_least_one(self.g_vars[u, t][b] for b in self.ln_indices),
+            at_least_one(self.g_vars[a, t]),
             self.types_beats(u, t, True) & self.types_beats(v, t, False)
         )
-        # strict inequalities?
 
     def packing_type_sum(self, t):
         i = iter(self.afud_and_pairs)
@@ -417,10 +442,11 @@ class Conditions:
 
     def solve(self):
         r = self.realizable()
-        print(r)
+        # print(r)
+        # return
         p = self.packable()
-        print(p)
-        return solve_expr(r & p)
+        # print(p)
+        return solve_expr(self.variable_clauses & r & p)
 
 def solve(graph):
-    return {v for v in (1,) if solve_one(graph, v)}
+    return {v for v in graph.v if solve_one(graph, v)}
