@@ -6,13 +6,15 @@ from pprint import pprint
 
 import sympy
 
+import glucose_wrapper
+
 # shims
 new_var = sympy.Symbol
 implies = sympy.Implies
 equivalent = sympy.Equivalent
 true = sympy.true
 false = sympy.false
-solve_expr = sympy.logic.inference.satisfiable
+solve_expr = glucose_wrapper.glucose_satisfiable  # sympy.logic.inference.satisfiable
 
 def at_most_one(literals):
     return reduce(operator.and_, (~a | ~b for a, b in itertools.combinations(literals, 2)), true)

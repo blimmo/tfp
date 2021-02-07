@@ -23,22 +23,29 @@ else:
 for i, feedback in to_iter:
     tournament.make_tournament(feedback=feedback)
     print(i, feedback, tournament)
-    print(sat.solve(tournament))
+    winners = bruteforce.solve(tournament)
+    print(winners)
+    result = sat.solve(tournament)
+    print(result)
 
     # first solve by brute force
-    # winners = bruteforce.solve(tournament)
 
     # n^k algo
-    # result = dp.solve(tournament)
+    # print(dp.solve(tournament))
     # if not fpt.check_positive(tournament, winners):
     #     print()
     #     print("!----------------------!")
     #     print()
     #
     # result = ilp.solve(tournament)
-    # if result != winners:
-    #     print()
-    #     print("!----------------------!")
-    #     print(winners, result)
-    #     print("!----------------------!")
-    #     print()
+    if result != winners:
+        print()
+        print("!----------------------!")
+        print(winners, result)
+        print("!----------------------!")
+        print()
+        break
+
+    print()
+    print()
+
