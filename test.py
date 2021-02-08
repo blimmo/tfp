@@ -13,10 +13,10 @@ def powerset(s):
     return itertools.chain.from_iterable(itertools.combinations(s, r) for r in range(len(s)+1))
 
 
-tournament = Graph(2)
+tournament = Graph(3)
 # for order in itertools.permutations(V):
 if os.getenv("DEBUG") is None:
-    to_iter = enumerate(powerset(tournament.e))
+    to_iter = enumerate(itertools.islice(powerset(tournament.e), 26, None))
 else:
     DEBUG = int(os.getenv("DEBUG"))
     to_iter = enumerate(itertools.islice(powerset(tournament.e), DEBUG, DEBUG + 1))
@@ -24,7 +24,7 @@ for i, feedback in to_iter:
     tournament.make_tournament(feedback=feedback)
     print(i, feedback, tournament)
     winners = bruteforce.solve(tournament)
-    print(winners)
+    print(winners, end=" ")
     result = sat.solve(tournament)
     print(result)
 
@@ -47,5 +47,3 @@ for i, feedback in to_iter:
         break
 
     print()
-    print()
-

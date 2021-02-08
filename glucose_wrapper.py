@@ -1,14 +1,18 @@
 from sympy.assumptions.cnf import EncodedCNF
-from pysat.solvers import Glucose3
+from pysat.solvers import Glucose4 as Solver
 
-def glucose_satisfiable(expr):
-    if not isinstance(expr, EncodedCNF):
-        exprs = EncodedCNF()
-        exprs.add_prop(expr)
-        expr = exprs
+def glucose_satisfiable(exprs):
+    encoded = EncodedCNF()
+    for expr in exprs:
+        encoded.add_prop(expr)
 
-    s = Glucose3(bootstrap_with=expr.data)
-    result = s.solve()
-    if not result:
-        return result
-    return {expr.symbols[abs(lit) - 1]: lit > 0 for lit in s.get_model()}
+    with Solver() as s:
+        for rclause in encoded.data:
+            clause = [literal for literal in rclause if literal != 0]
+            if len(clause) == 0:
+                return False
+            s.add_clause(clause)
+        result = s.solve()
+        if not result:
+            return result
+        return {encoded.symbols[abs(lit) - 1]: lit > 0 for lit in s.get_model()}
