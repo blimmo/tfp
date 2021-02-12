@@ -1,9 +1,11 @@
 import itertools
 import math
 import operator
-from functools import partial
+from collections import defaultdict
+from functools import partial, reduce
 from pprint import pprint
 
+import networkx as nx
 import sympy
 
 import glucose_wrapper
@@ -15,6 +17,17 @@ equivalent = sympy.Equivalent
 true = sympy.true
 false = sympy.false
 solve_expr = glucose_wrapper.glucose_satisfiable  # sympy.logic.inference.satisfiable
+
+def flatten(a):
+    return reduce(operator.iconcat, a, [])
+
+def pretty(result):
+    pprint([item for item in result
+            if ("L_" in item[0])
+            or ("psi_" in item[0])
+            # or ("chi_" in item[0])
+            # or ("len_" in item[0])
+            or ("g_" in item[0])])
 
 def at_most_one(literals):
     return sympy.logic.And(*(~a | ~b for a, b in itertools.combinations(literals, 2)))
@@ -32,26 +45,20 @@ def all_(literals):
 def distinct2(s):
     return tuple(itertools.permutations(s, 2))
 
-def check(expr):
-    result = solve_expr(expr)
-    if result is False:
-        # print(expr)
-        raise Exception
-    return expr
+def bin_arb(nodes):
+    assert len(nodes) > 0
+    if len(nodes) == 1:
+        arb = nx.DiGraph()
+        arb.add_nodes_from(nodes)
+        return arb, nodes[0]
+    arb1, root1 = bin_arb(nodes[:len(nodes) // 2])
+    arb2, root2 = bin_arb(nodes[len(nodes) // 2:])
+    arb = nx.union(arb1, arb2)
+    arb.add_edge(root1, root2)
+    return arb, root1
 
-def pretty(result):
-    pprint(list(item for item in sorted(result.items(), key=lambda i: str(i[0]))
-                if ("L_" in str(item[0]))
-                or ("psi_" in str(item[0]))
-                or ("chi_" in str(item[0]))
-                or ("len_" in str(item[0]))
-                or ("g_" in str(item[0]))
-                # or ("dist_" in str(item[0]))
-                ))
-
-def solve_one(graph, v_star):
+def solve_one(graph, v_star, decision=True):
     # print(f"v_star = {v_star}")
-    print(v_star, end="")
     v_f = frozenset(sum(graph.feedback, start=()))
     a_f = v_f.union((v_star,))
     for k, v in graph.data.items():
@@ -59,33 +66,39 @@ def solve_one(graph, v_star):
             return k == v_star
 
     tau = {}
-    num = [0]
+    invtau = defaultdict(set)
+    cur = 0
     for v in graph.order:
         if v in a_f:
-            tau[v] = len(num) - 0.5
-            num.append(0)
+            tau[v] = cur + 0.5
+            invtau[cur + 0.5].add(v)
+            cur += 1
         else:
-            tau[v] = len(num) - 1
-            num[-1] += 1
-    num = tuple(num)
-    naftypes = tuple(range(len(num)))
-    types = tuple(i / 2 for i in range(2 * len(a_f) + 1))
+            tau[v] = cur
+            invtau[cur].add(v)
+    naftypes = tuple(range(cur + 1))
+    num = tuple(len(invtau[t]) for t in naftypes)
+    # types = tuple(i / 2 for i in range(2 * len(a_f) + 1))
 
     max_dummy_size = min(4 * len(a_f), graph.n) - len(a_f)  # maybe 4 * len(a_f)?
     for dummy_size in range(max_dummy_size + 1):
-        # print(f"dummy_size = {dummy_size}")
         dummy = {-i for i in range(1, dummy_size + 1)}
-        cond = Conditions.make(graph, v_star, v_f, a_f, dummy, naftypes, tau, num)
+        cond = Conditions.make(graph, v_star, v_f, a_f, dummy, naftypes, tau, invtau, num)
         result = cond.solve()
         print(".", end="")
         if result is not False:
-            # pretty(result)
-            return True
-    return False
+            if decision:
+                return True
+            else:
+                return cond.decode(result)  # [(cond.inverse_lookup(k), v) for k, v in result.items()]
+    if decision:
+        return False
+    else:
+        return None
 
 class Conditions:
     def __init__(self, graph=None, ln=None, v_star=None, v_f=None, a_f=None, dummy=None,
-                 naftypes=None, tau=None, num=None, afud=None, afuddv=None):
+                 naftypes=None, tau=None, invtau=None, num=None, afud=None, afuddv=None):
         self.graph = graph
         self.ln = ln
         if ln is not None:
@@ -98,16 +111,18 @@ class Conditions:
         self.dummy = dummy
         self.naftypes = naftypes
         self.tau = tau
+        self.invtau = invtau
         self.num = num
         self.afud = afud
         self.afuddv = afuddv
-        self.afud_and_pairs = afud.union(distinct2(afud))
+        if afud is not None:
+            self.afud_and_pairs = afud.union(distinct2(afud))
         self.variable_clauses = []
 
     @classmethod
-    def make(cls, graph, v_star, v_f, a_f, dummy, typesaf, tau, num):
+    def make(cls, graph, v_star, v_f, a_f, dummy, typesaf, tau, invtau, num):
         afud = a_f.union(dummy)
-        ins = cls(graph, graph.ln, v_star, v_f, a_f, dummy, typesaf, tau, num,
+        ins = cls(graph, graph.ln, v_star, v_f, a_f, dummy, typesaf, tau, invtau, num,
                   afud, afud.difference({v_star}))
         ins.gen_l_vars()
         ins.gen_psi_vars()
@@ -115,10 +130,48 @@ class Conditions:
         ins.gen_length_vars()
         ins.gen_dist_vars()
         ins.gen_same_bit_vars()
-        ins.gen_w_vars()
-        ins.gen_y_vars()
         ins.gen_g_vars()
         return ins
+
+    def decode(self, rresult):
+        result = {str(k) for k, v in rresult.items() if v}
+        arb = nx.DiGraph()
+        overflow = set()
+        dummy_map = {}
+        for k, v in self.l_vars.items():
+            if str(v) in result:
+                print("L", k)
+                arb.add_edge(*k)
+        for (u, i), v in self.psi_vars.items():
+            if str(v) in result:
+                print("psi", u, i)
+                dummy_map[u] = self.invtau[i].pop()
+                overflow.add((u, i))
+        for (e, i), lv in self.g_vars.items():
+            for b, v in enumerate(lv):
+                if str(v) in result:
+                    print("g", e, i, 2 ** b)
+                    try:
+                        u, v = e
+                    except TypeError:
+                        # e is a node
+                        count = 2 ** b
+                        if e in self.dummy and (e, i) in overflow:
+                            # g(u, psi(u)) is 1 too big
+                            overflow.remove((e, i))
+                            count -= 1
+                            if count == 0:
+                                continue
+                        children = sorted([self.invtau[i].pop() for _ in range(count)])
+                        subarb, root = bin_arb(children)
+                        arb = nx.union(arb, subarb)
+                        arb.add_edge(e, root)
+                    else:
+                        # e is an edge
+                        print(u, v, i, 2 ** b)
+                    # g[e, i] += 2 ** b
+        nx.relabel_nodes(arb, dummy_map, copy=False)
+        return arb
 
     def gen_l_vars(self):
         self.l_vars = ret = {
@@ -178,18 +231,6 @@ class Conditions:
                                       for u, v in distinct2(self.afud)))
         return same_bit_vars
 
-    def gen_w_vars(self):
-        """For LocCheckPath. Represents chi"""
-        self.w_vars = w_vars = {v: [new_var(f"w_{v}_{b}") for b in self.lln_indices]
-                                for v in self.afud}
-        self.variable_clauses.append(all_(all_(implies(self.chi_vars[v][b], (all_(
-                                               w_vars[v][i] if ((b >> i) & 1) == 1 else ~w_vars[v][i]
-                                               for i in self.lln_indices
-                                           )))  # maybe equivalent?
-                                           for b in self.ln_indices)
-                                      for v in self.afud))
-        return w_vars
-
     def sum(self, x, y, prefix):
         # assert len(x) == len(y)
         if len(x) < len(y):
@@ -199,23 +240,15 @@ class Conditions:
         indices = list(range(len(x)))
         result_vars = [new_var(f"{prefix}_b:{b}") for b in indices]
         c = [new_var(f"{prefix}_carry:{b}") for b in indices]
-        c_clauses = equivalent(c[0], (x[0] & y[0]))  # first carry doesn't consider previous ones
-        c_clauses &= all_(equivalent(c[b], ((x[b] & y[b]) | (x[b] & c[b - 1]) | (y[b] & c[b - 1])))
-                          for b in indices[1:])
-        result_clauses = equivalent(result_vars[0], (x[0] ^ y[0]))
-        result_clauses &= all_(equivalent(result_vars[b], (x[b] ^ y[b] ^ c[b - 1]))
-                               for b in indices[1:])
-        result_clauses &= equivalent(c[-1], false)
-        self.variable_clauses.append(c_clauses & result_clauses)
+        clauses = [equivalent(c[0], x[0] & y[0])]  # first carry doesn't consider previous ones
+        clauses += [equivalent(c[b], sympy.logic.Or(x[b] & y[b], x[b] & c[b - 1], y[b] & c[b - 1]))
+                    for b in indices[1:]]
+        clauses.append(equivalent(result_vars[0], x[0] ^ y[0]))
+        clauses += [equivalent(result_vars[b], sympy.logic.Xor(x[b], y[b], c[b - 1]))
+                    for b in indices[1:]]
+        clauses.append(equivalent(c[-1], false))
+        self.variable_clauses += clauses
         return result_vars
-
-    def gen_y_vars(self):
-        """For LocCheckPath. Represents chi + l"""
-        self.y_vars = {
-            (u, v): self.sum(self.w_vars[v], self.length_vars[u, v], f"chi+l_u:{u}_v:{v}")
-            for u, v in distinct2(self.afud)
-            if v != self.v_star
-        }
 
     # validity
     def at_most_one_parent(self, u):
@@ -329,42 +362,50 @@ class Conditions:
         if v == self.v_star:
             # no arcs to v_star so implies short circuits
             return true
+        w_vars = {v: [new_var(f"w_{v}_{b}") for b in self.lln_indices]
+                  for v in self.afud}
+        self.variable_clauses += flatten([[implies(self.chi_vars[v][b], (all_(
+            w_vars[v][i] if ((b >> i) & 1) == 1 else ~w_vars[v][i]
+            for i in self.lln_indices))) for b in self.ln_indices] for v in self.afud])  # maybe equivalent?
+        y_vars = {
+            (u, v): self.sum(w_vars[v], self.length_vars[u, v], f"chi+l_u:{u}_v:{v}")
+            for u, v in distinct2(self.afud)
+            if v != self.v_star
+        }
         # if u not in self.dummy:
         #     return aiger.atom(False)
         same_bit_vars = [new_var(f"same_{u}_{v}_{b}") for b in self.lln_indices]
-        same_clauses = all_(equivalent(same_bit_vars[b], ((self.w_vars[u][b] & self.y_vars[u, v][b])
-                                                 | (~self.w_vars[u][b] & ~self.y_vars[u, v][b])))
-                            for b in self.lln_indices)
+        self.variable_clauses += [equivalent(same_bit_vars[b], ((w_vars[u][b] & y_vars[u, v][b])
+                                                                | (~w_vars[u][b] & ~y_vars[u, v][b])))
+                                  for b in self.lln_indices]
         return implies(
             self.is_arc(u, v) & self.child_of_closure(u),
             # all_(same_bit_vars) |  # equal
             at_least_one(all_(same_bit_vars[i] for i in self.lln_indices if i > b)  # largest condition
-                         & self.w_vars[u][b] & ~self.y_vars[u, v][b]
+                         & w_vars[u][b] & ~y_vars[u, v][b]
                          for b in self.lln_indices)
-        ) & same_clauses
+        )
 
     def realizable(self):
-        return [
+        return flatten((
             # (i) Validity
-            all_(self.at_most_one_parent(u) for u in self.afuddv),
-            all_(self.exactly_one_type(u) for u in self.dummy),
-            all_(self.exactly_one_size_bit(u) for u in self.afud),
-            self.chi_vars[self.v_star][self.ln],
-            all_(self.at_most_one_dist(u) for u in self.afuddv),
-            all_(self.at_least_one_dist(u) for u in self.afuddv),
-            all_(all_(self.verify_dist(u, d) for u in self.afuddv) for d in self.dist_b_indices),
-            all_(self.reachable(u) for u in self.dummy),
-            all_(self.not_leaf(u) for u in self.dummy),
+            [self.at_most_one_parent(u) for u in self.afuddv],
+            [self.exactly_one_type(u) for u in self.dummy],
+            [self.exactly_one_size_bit(u) for u in self.afud],
+            [self.chi_vars[self.v_star][self.ln]],
+            [self.at_most_one_dist(u) for u in self.afuddv],
+            [self.at_least_one_dist(u) for u in self.afuddv],
+            [all_(self.verify_dist(u, d) for u in self.afuddv) for d in self.dist_b_indices],
+            [self.reachable(u) for u in self.dummy],
+            [self.not_leaf(u) for u in self.dummy],
             # (ii)
-            all_(self.if_arc_then_valid(u, v)
-                 & self.loc_check_len_sensible(u, v)
-                 & self.loc_check_size_dec(u, v)
-                 & self.loc_check_path(u, v)
-                 for u, v in distinct2(self.afud)),
+            [self.if_arc_then_valid(u, v) for u, v in distinct2(self.afud)],
+            [self.loc_check_len_sensible(u, v) for u, v in distinct2(self.afud)],
+            [self.loc_check_size_dec(u, v) for u, v in distinct2(self.afud)],
+            [self.loc_check_path(u, v) for u, v in distinct2(self.afud)],
             # (iii)
-            all_(self.loc_check_size_diff(u, v, w)
-                 for u, v, w in itertools.permutations(self.afud, 3))
-        ]
+            [self.loc_check_size_diff(u, v, w) for u, v, w in itertools.permutations(self.afud, 3)]
+        ))
 
     def packing_node_sum(self, u):
         assert u in self.afud
@@ -431,19 +472,18 @@ class Conditions:
         )
 
     def packable(self):
-        return [
+        return flatten((
             # 1.
-            all_(self.packing_node_sum(u)
-                 & all_(self.packing_node_type(u, t) for t in self.naftypes)
-                 & self.packing_node_self(u)
-                 for u in self.afud),
+            [self.packing_node_sum(u) for u in self.afud],
+            flatten([self.packing_node_type(u, t) for t in self.naftypes] for u in self.afud),
+            [self.packing_node_self(u) for u in self.afud],
             # 2.
-            all_(self.packing_arc_sum(a)
-                 & all_(self.packing_arc_type(a, t) for t in self.naftypes)
-                 for a in distinct2(self.afud) if a[1] != self.v_star),
+            [self.packing_arc_sum(a) for a in distinct2(self.afud) if a[1] != self.v_star],
+            flatten([self.packing_arc_type(a, t) for t in self.naftypes]
+                    for a in distinct2(self.afud) if a[1] != self.v_star),
             # 3.
-            all_(self.packing_type_sum(t) for t in self.naftypes)
-        ]
+            [self.packing_type_sum(t) for t in self.naftypes]
+        ))
 
     def solve(self):
         r = self.realizable()

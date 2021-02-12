@@ -1,10 +1,12 @@
-from sympy.assumptions.cnf import EncodedCNF
+from sympy.assumptions.cnf import EncodedCNF, CNF
 from pysat.solvers import Glucose4 as Solver
 
 def glucose_satisfiable(exprs):
-    encoded = EncodedCNF()
+    cnf = CNF()
     for expr in exprs:
-        encoded.add_prop(expr)
+        cnf.add(expr)
+    encoded = EncodedCNF()
+    encoded.from_cnf(cnf)
 
     with Solver() as s:
         for rclause in encoded.data:
