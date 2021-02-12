@@ -51,11 +51,23 @@ def bin_arb(nodes):
         arb = nx.DiGraph()
         arb.add_nodes_from(nodes)
         return arb, nodes[0]
-    arb1, root1 = bin_arb(nodes[:len(nodes) // 2])
-    arb2, root2 = bin_arb(nodes[len(nodes) // 2:])
+    mid = len(nodes) // 2
+    arb1, root1 = bin_arb(nodes[:mid])
+    arb2, root2 = bin_arb(nodes[mid:])
     arb = nx.union(arb1, arb2)
     arb.add_edge(root1, root2)
     return arb, root1
+
+def split_nodes(nodes):
+    n = len(nodes)
+    assert n > 0
+    i = 1
+    start = 0
+    while i <= n:
+        if i & n:
+            yield nodes[start:i + start]
+            start = i
+        i <<= 1
 
 def solve_one(graph, v_star, decision=True):
     # print(f"v_star = {v_star}")
@@ -136,8 +148,8 @@ class Conditions:
     def decode(self, rresult):
         result = {str(k) for k, v in rresult.items() if v}
         arb = nx.DiGraph()
-        overflow = set()
-        dummy_map = {}
+        psi = {}
+        g = defaultdict(lambda: defaultdict(int))
         for k, v in self.l_vars.items():
             if str(v) in result:
                 print("L", k)
@@ -145,32 +157,30 @@ class Conditions:
         for (u, i), v in self.psi_vars.items():
             if str(v) in result:
                 print("psi", u, i)
-                dummy_map[u] = self.invtau[i].pop()
-                overflow.add((u, i))
+                psi[u] = self.invtau[i].pop()
+                # g(u, psi(u)) is 1 too big
+                g[u][i] -= 1
         for (e, i), lv in self.g_vars.items():
             for b, v in enumerate(lv):
                 if str(v) in result:
                     print("g", e, i, 2 ** b)
-                    try:
-                        u, v = e
-                    except TypeError:
-                        # e is a node
-                        count = 2 ** b
-                        if e in self.dummy and (e, i) in overflow:
-                            # g(u, psi(u)) is 1 too big
-                            overflow.remove((e, i))
-                            count -= 1
-                            if count == 0:
-                                continue
-                        children = sorted([self.invtau[i].pop() for _ in range(count)])
-                        subarb, root = bin_arb(children)
-                        arb = nx.union(arb, subarb)
-                        arb.add_edge(e, root)
-                    else:
-                        # e is an edge
-                        print(u, v, i, 2 ** b)
-                    # g[e, i] += 2 ** b
-        nx.relabel_nodes(arb, dummy_map, copy=False)
+                    g[e][i] += 2 ** b
+        for e, d in g.items():
+            children = []
+            for i, count in d.items():
+                children += [self.invtau[i].pop() for _ in range(count)]
+            try:
+                u, v = e
+            except TypeError:
+                # e is a node
+                for group in split_nodes(children):
+                    subarb, root = bin_arb(group)
+                    arb = nx.union(arb, subarb)
+                    arb.add_edge(e, root)
+            else:
+                # e is an edge
+                print(u, v, d)
+        nx.relabel_nodes(arb, psi, copy=False)
         return arb
 
     def gen_l_vars(self):
