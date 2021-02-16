@@ -8,6 +8,7 @@ from pprint import pprint
 import networkx as nx
 import sympy
 
+import common
 import glucose_wrapper
 
 # shims
@@ -66,51 +67,43 @@ def split_nodes(nodes):
     while i <= n:
         if i & n:
             yield nodes[start:i + start]
-            start = i
+            start = i + start
         i <<= 1
 
 def solve_one(graph, v_star, decision=True):
     # print(f"v_star = {v_star}")
     v_f = frozenset(sum(graph.feedback, start=()))
     a_f = v_f.union((v_star,))
-    for k, v in graph.data.items():
-        if v.union([k]) == graph.v:
-            return k == v_star
+    if decision:
+        for k, v in graph.data.items():
+            if v.union([k]) == graph.v:
+                return k == v_star
 
-    tau = {}
-    invtau = defaultdict(set)
-    cur = 0
-    for v in graph.order:
-        if v in a_f:
-            tau[v] = cur + 0.5
-            invtau[cur + 0.5].add(v)
-            cur += 1
-        else:
-            tau[v] = cur
-            invtau[cur].add(v)
-    naftypes = tuple(range(cur + 1))
-    num = tuple(len(invtau[t]) for t in naftypes)
+    tau, invtau = common.calculate_tau(graph, a_f)
+    naftypes = tuple(range(len(a_f) + 1))
+    mu = tuple(len(invtau[t]) for t in naftypes)
+    # naftypes = tuple(range(cur + 1))
     # types = tuple(i / 2 for i in range(2 * len(a_f) + 1))
 
-    max_dummy_size = min(4 * len(a_f), graph.n) - len(a_f)  # maybe 4 * len(a_f)?
+    max_dummy_size = min(4 * len(a_f), graph.n) - len(a_f)
     for dummy_size in range(max_dummy_size + 1):
         dummy = {-i for i in range(1, dummy_size + 1)}
-        cond = Conditions.make(graph, v_star, v_f, a_f, dummy, naftypes, tau, invtau, num)
+        cond = Conditions.make(graph, v_star, a_f, dummy, naftypes, tau, invtau, mu)
         result = cond.solve()
         print(".", end="")
         if result is not False:
             if decision:
                 return True
             else:
-                return cond.decode(result)  # [(cond.inverse_lookup(k), v) for k, v in result.items()]
+                return cond.decode(result)
     if decision:
         return False
     else:
         return None
 
 class Conditions:
-    def __init__(self, graph=None, ln=None, v_star=None, v_f=None, a_f=None, dummy=None,
-                 naftypes=None, tau=None, invtau=None, num=None, afud=None, afuddv=None):
+    def __init__(self, graph=None, ln=None, v_star=None, a_f=None, dummy=None,
+                 naftypes=None, tau=None, invtau=None, mu=None, afud=None):
         self.graph = graph
         self.ln = ln
         if ln is not None:
@@ -118,24 +111,22 @@ class Conditions:
             self.lln = lln = math.ceil(math.log2(ln + 1))
             self.lln_indices = list(range(lln))
         self.v_star = v_star
-        self.v_f = v_f
         self.a_f = a_f
         self.dummy = dummy
         self.naftypes = naftypes
         self.tau = tau
         self.invtau = invtau
-        self.num = num
+        self.mu = mu
         self.afud = afud
-        self.afuddv = afuddv
         if afud is not None:
+            self.afuddv = afud.difference({v_star})
             self.afud_and_pairs = afud.union(distinct2(afud))
         self.variable_clauses = []
 
     @classmethod
-    def make(cls, graph, v_star, v_f, a_f, dummy, typesaf, tau, invtau, num):
+    def make(cls, graph, v_star, a_f, dummy, typesaf, tau, invtau, num):
         afud = a_f.union(dummy)
-        ins = cls(graph, graph.ln, v_star, v_f, a_f, dummy, typesaf, tau, invtau, num,
-                  afud, afud.difference({v_star}))
+        ins = cls(graph, graph.ln, v_star, a_f, dummy, typesaf, tau, invtau, num, afud)
         ins.gen_l_vars()
         ins.gen_psi_vars()
         ins.gen_chi_vars()
@@ -152,18 +143,18 @@ class Conditions:
         g = defaultdict(lambda: defaultdict(int))
         for k, v in self.l_vars.items():
             if str(v) in result:
-                print("L", k)
+                # print("L", k)
                 arb.add_edge(*k)
         for (u, i), v in self.psi_vars.items():
             if str(v) in result:
-                print("psi", u, i)
+                # print("psi", u, i)
                 psi[u] = self.invtau[i].pop()
                 # g(u, psi(u)) is 1 too big
                 g[u][i] -= 1
         for (e, i), lv in self.g_vars.items():
             for b, v in enumerate(lv):
                 if str(v) in result:
-                    print("g", e, i, 2 ** b)
+                    # print("g", e, i, 2 ** b)
                     g[e][i] += 2 ** b
         for e, d in g.items():
             children = []
@@ -478,7 +469,7 @@ class Conditions:
         for j, e in enumerate(i):
             lhs = self.sum(lhs, self.g_vars[e, t], f"pts:{e}_{t}")
         return all_(
-            v if ((self.num[t] >> b) & 1) == 1 else ~v for b, v in enumerate(lhs)
+            v if ((self.mu[t] >> b) & 1) == 1 else ~v for b, v in enumerate(lhs)
         )
 
     def packable(self):
