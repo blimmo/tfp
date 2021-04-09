@@ -1,10 +1,11 @@
 import itertools
 import unittest
-from pprint import pprint, pformat
+from pprint import pprint
 
-import aiger_sat
+from parameterized import parameterized
 
-from sat import Conditions, all_, solve_expr, new_var
+from sat import Conditions, all_, solve_expr, new_var, solve_one
+from graph import Graph
 
 
 def switch_ith(a, i):
@@ -16,7 +17,31 @@ def val_to_encode(val, f, inds):
 def encode_to_val(f, inds):
     return sum(2**i for i, v in enumerate(inds) if f(v))
 
-class Test(unittest.TestCase):
+class TestAll(unittest.TestCase):
+    @parameterized.expand([
+        (2, [(0, 3)], {0, 1}),
+        (2, [(0, 1), (1, 2)], {0, 1, 2}),
+        (2, [(0, 3), (0, 2)], {1, 2}),
+        (3, [(0, 2)], {0, 1, 2}),
+        (3, [(0, 1), (1, 7)], {0, 1}),
+        (3, [(0, 7), (0, 4)], {0, 1, 2, 4}),
+    ])
+    def test_main(self, ln, feedback, winners):
+        tournament = Graph(ln)
+        tournament.make_tournament(feedback=feedback)
+        for v_star in tournament.v:
+            with self.subTest(v_star=v_star):
+                self.assertEqual(solve_one(tournament, v_star), v_star in winners)
+
+    # def test_3(self):
+    #     tournament = Graph(3)
+    #     tournament.make_tournament(feedback=((0, 2),))
+    #     winners = {0, 1, 2}
+    #     for v_star in (0, 1, 2, 3):
+    #         with self.subTest(v_star=v_star):
+    #             self.assertEqual(solve_one(tournament, v_star), v_star in winners)
+
+class TestParts(unittest.TestCase):
     def and_false(self, *expr):
         self.assertEqual(aiger_sat.solve(all_(expr)), None)
 
