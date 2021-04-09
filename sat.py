@@ -22,14 +22,6 @@ solve_expr = glucose_wrapper.glucose_satisfiable  # sympy.logic.inference.satisf
 def flatten(a):
     return reduce(operator.iconcat, a, [])
 
-def pretty(result):
-    pprint([item for item in result
-            if ("L_" in item[0])
-            or ("psi_" in item[0])
-            # or ("chi_" in item[0])
-            # or ("len_" in item[0])
-            or ("g_" in item[0])])
-
 def at_most_one(literals):
     return sympy.logic.And(*(~a | ~b for a, b in itertools.combinations(literals, 2)))
 
@@ -70,7 +62,8 @@ def split_nodes(nodes):
             start = i + start
         i <<= 1
 
-def solve_one(graph, v_star, decision=True):
+def solve_one(graph, v_star, decision=True, improvement=True):
+    cls = Conditions if improvement else OldConditions
     # print(f"v_star = {v_star}")
     v_f = frozenset(sum(graph.feedback, start=()))
     a_f = v_f.union((v_star,))
@@ -85,10 +78,17 @@ def solve_one(graph, v_star, decision=True):
     # naftypes = tuple(range(cur + 1))
     # types = tuple(i / 2 for i in range(2 * len(a_f) + 1))
 
-    max_dummy_size = min(4 * len(a_f), graph.n) - len(a_f)
+    max_dummy_size = max(min(4 * len(a_f) - 5, graph.n) - len(a_f), 0)
+    # max_dummy_size = min(4 * len(a_f), graph.n) - len(a_f)
+    # print(len(a_f), max_dummy_size)
+    # |LCA(A_f)| <= |A_f| - 2?
+    # if 4 * len(a_f) > graph.n:
+    #     to_iter = range(graph.n - len(a_f) + 1)
+    # else:
+    #     to_iter = (3 * len(a_f),)
     for dummy_size in range(max_dummy_size + 1):
         dummy = {-i for i in range(1, dummy_size + 1)}
-        cond = Conditions.make(graph, v_star, a_f, dummy, naftypes, tau, invtau, mu)
+        cond = cls(graph, v_star, a_f, dummy, naftypes, tau, invtau, mu)
         result = cond.solve()
         print(".", end="")
         if result is not False:
@@ -101,15 +101,16 @@ def solve_one(graph, v_star, decision=True):
     else:
         return None
 
+def solve(graph):
+    return {v for v in graph.v if solve_one(graph, v)}
+
 class Conditions:
-    def __init__(self, graph=None, ln=None, v_star=None, a_f=None, dummy=None,
-                 naftypes=None, tau=None, invtau=None, mu=None, afud=None):
+    def __init__(self, graph, v_star, a_f, dummy, naftypes, tau, invtau, mu):
         self.graph = graph
-        self.ln = ln
-        if ln is not None:
-            self.ln_indices = list(range(ln + 1))
-            self.lln = lln = math.ceil(math.log2(ln + 1))
-            self.lln_indices = list(range(lln))
+        self.ln = graph.ln
+        self.ln_indices = list(range(self.ln + 1))
+        self.lln = lln = math.ceil(math.log2(self.ln + 1))
+        self.lln_indices = list(range(lln))
         self.v_star = v_star
         self.a_f = a_f
         self.dummy = dummy
@@ -117,123 +118,46 @@ class Conditions:
         self.tau = tau
         self.invtau = invtau
         self.mu = mu
-        self.afud = afud
-        if afud is not None:
-            self.afuddv = afud.difference({v_star})
-            self.afud_and_pairs = afud.union(distinct2(afud))
+        self.afud = a_f.union(dummy)
+        self.afuddv = self.afud.difference({v_star})
         self.variable_clauses = []
 
-    @classmethod
-    def make(cls, graph, v_star, a_f, dummy, typesaf, tau, invtau, num):
-        afud = a_f.union(dummy)
-        ins = cls(graph, graph.ln, v_star, a_f, dummy, typesaf, tau, invtau, num, afud)
-        ins.gen_l_vars()
-        ins.gen_psi_vars()
-        ins.gen_chi_vars()
-        ins.gen_length_vars()
-        ins.gen_dist_vars()
-        ins.gen_same_bit_vars()
-        ins.gen_g_vars()
-        return ins
-
-    def decode(self, rresult):
-        result = {str(k) for k, v in rresult.items() if v}
-        arb = nx.DiGraph()
-        psi = {}
-        g = defaultdict(lambda: defaultdict(int))
-        for k, v in self.l_vars.items():
-            if str(v) in result:
-                # print("L", k)
-                arb.add_edge(*k)
-        for (u, i), v in self.psi_vars.items():
-            if str(v) in result:
-                # print("psi", u, i)
-                psi[u] = self.invtau[i].pop()
-                # g(u, psi(u)) is 1 too big
-                g[u][i] -= 1
-        for (e, i), lv in self.g_vars.items():
-            for b, v in enumerate(lv):
-                if str(v) in result:
-                    # print("g", e, i, 2 ** b)
-                    g[e][i] += 2 ** b
-        for e, d in g.items():
-            children = []
-            for i, count in d.items():
-                children += [self.invtau[i].pop() for _ in range(count)]
-            try:
-                u, v = e
-            except TypeError:
-                # e is a node
-                for group in split_nodes(children):
-                    subarb, root = bin_arb(group)
-                    arb = nx.union(arb, subarb)
-                    arb.add_edge(e, root)
-            else:
-                # e is an edge
-                print(u, v, d)
-        nx.relabel_nodes(arb, psi, copy=False)
-        return arb
-
-    def gen_l_vars(self):
-        self.l_vars = ret = {
+        self.l_vars = {
             (u, v): new_var(f"L_{u}->{v}")
             for u, v in distinct2(self.afud)
             if v != self.v_star
         }
-        return ret
-
-    def gen_psi_vars(self):
-        self.psi_vars = ret = {
+        self.psi_vars = {
             (u, i): new_var(f"psi_{u}<={i}")
             for u in self.dummy
             for i in self.naftypes
         }
-        return ret
-
-    def gen_chi_vars(self):
-        self.chi_vars = ret = {
+        self.chi_vars = {
             u: [new_var(f"chi_u:{u}_b:{b}") for b in self.ln_indices]
             for u in self.afud
         }
-        return ret
-
-    def gen_length_vars(self):
-        self.length_vars = ret = {
-            (u, v): [new_var(f"len_{u}->{v}_{b}") for b in self.lln_indices]
-            for u, v in distinct2(self.afud)
-            if v != self.v_star
-        }
-        return ret
-
-    def gen_dist_vars(self):
         self.dist_b_indices = list(range(1, self.ln + 1))
-        self.dist_vars = ret = {
+        self.dist_vars = {
             (u, d): new_var(f"dist_{u}_{d}")
             for u in self.afuddv
             for d in self.dist_b_indices
         }
-        return ret
-
-    def gen_g_vars(self):
         self.g_vars = {
             (e, i): [new_var(f"g_{e}_{i}_{b}") for b in self.ln_indices]
-            for e in self.afud_and_pairs
+            for e in self.afud
             for i in self.naftypes
         }
 
-    def gen_same_bit_vars(self):
-        """For LocCheckSize(Dec/Diff)"""
-        # TODO: Generalise same
+        # For LocCheckSize(Dec/Diff)
         self.same_bit_vars = same_bit_vars = {(u, v): [new_var(f"samebit_{u}_{v}_{b}") for b in self.ln_indices]
                                               for u, v in distinct2(self.afud)}
-        self.variable_clauses.append(all_(all_(equivalent(same_bit_vars[u, v][b], ((self.chi_vars[u][b] & self.chi_vars[v][b])
-                                                                      | (~self.chi_vars[u][b] & ~self.chi_vars[v][b])))
-                                           for b in self.ln_indices)
-                                      for u, v in distinct2(self.afud)))
-        return same_bit_vars
+        self.variable_clauses.append(all_(all_(
+            equivalent(same_bit_vars[u, v][b], ((self.chi_vars[u][b] & self.chi_vars[v][b])
+                       | (~self.chi_vars[u][b] & ~self.chi_vars[v][b])))
+            for b in self.ln_indices
+        ) for u, v in distinct2(self.afud)))
 
     def sum(self, x, y, prefix):
-        # assert len(x) == len(y)
         if len(x) < len(y):
             x = x + [false] * (len(y) - len(x))
         elif len(y) < len(x):
@@ -333,15 +257,6 @@ class Conditions:
         assert u in self.dummy and v in self.dummy and u != v
         return implies(self.is_arc(u, v) & self.child_of_closure(u), self.child_of_closure(v))
 
-    def loc_check_len_sensible(self, u, v):
-        # for u, v in distinct2(afud) if v != v_star  # possibly should just be false/true for v_star
-        assert u in self.afud and v in self.afud and u != v
-        if v == self.v_star:
-            # no arcs to v_star so implies short circuits
-            return true
-        return implies(self.is_arc(u, v) & (true if u in self.a_f else self.in_closure(u)),
-                       all_(~self.length_vars[u, v][b] for b in self.lln_indices))
-
     def loc_check_size_dec(self, u, v):
         assert u in self.afud and v in self.afud and u != v
         return implies(
@@ -357,6 +272,150 @@ class Conditions:
             self.is_arc(u, v) & self.is_arc(u, w),
             ~all_(self.same_bit_vars[v, w][b] for b in self.ln_indices)
         )
+
+    def realizable(self):
+        return flatten((
+            # (i) Validity
+            [self.at_most_one_parent(u) for u in self.afuddv],
+            [self.exactly_one_type(u) for u in self.dummy],
+            [self.exactly_one_size_bit(u) for u in self.afud],
+            [self.chi_vars[self.v_star][self.ln]],
+            [self.at_most_one_dist(u) for u in self.afuddv],
+            [self.at_least_one_dist(u) for u in self.afuddv],
+            [all_(self.verify_dist(u, d) for u in self.afuddv) for d in self.dist_b_indices],
+            [self.reachable(u) for u in self.dummy],
+            [self.not_leaf(u) for u in self.dummy],
+            # (ii)
+            [self.if_arc_then_valid(u, v) for u, v in distinct2(self.afud)],
+            [self.loc_check_size_dec(u, v) for u, v in distinct2(self.afud)],
+            # (iii)
+            [self.loc_check_size_diff(u, v, w) for u, v, w in itertools.permutations(self.afud, 3)]
+        ))
+
+    def packing_node_sum(self, u):
+        assert u in self.afud
+        lhs = [true if u in self.a_f else false]  # u itself is counted in chi
+        for t in self.naftypes:
+            lhs = self.sum(lhs, self.g_vars[u, t], f"pnslhs:{u}_{t}")
+        for v in self.afuddv:
+            if v == u:
+                continue
+            lhs = self.sum(
+                lhs,
+                [self.l_vars[u, v] & var for var in self.chi_vars[v]],
+                f"pnslhs2:{u}_{v}"
+            )
+        return all_(equivalent(lv, rv) for lv, rv in zip(lhs, self.chi_vars[u]))
+
+    def types_beats(self, u, threshold, u_wins):
+        # strict inequalities?
+        comp = operator.le if u_wins else operator.ge
+        if u in self.dummy:
+            return at_least_one(self.psi_vars[u, i] for i in self.naftypes if comp(i, threshold))
+        else:  # u in self.a_f
+            return true if comp(self.tau[u], threshold) else false
+        #  and self.num[threshold] > 0 ?
+
+    def packing_node_type(self, u, t):
+        assert u in self.afud and t in self.naftypes
+        return implies(at_least_one(self.g_vars[u, t][b] for b in self.ln_indices), self.types_beats(u, t, True))
+
+    def packing_node_self(self, u):
+        assert u in self.afud
+        if u in self.a_f:
+            # psi(u) isn't defined but it doesn't matter
+            return true
+        return all_(implies(self.psi_vars[u, i],
+                            at_least_one(self.g_vars[u, i][b] for b in self.ln_indices)
+        ) for i in self.naftypes)
+
+    def packing_type_sum(self, t):
+        i = iter(self.afud)
+        lhs = self.g_vars[next(i), t]
+        for j, e in enumerate(i):
+            lhs = self.sum(lhs, self.g_vars[e, t], f"pts:{e}_{t}")
+        return all_(
+            v if ((self.mu[t] >> b) & 1) == 1 else ~v for b, v in enumerate(lhs)
+        )
+
+    def packable(self):
+        return flatten((
+            # 1.
+            [self.packing_node_sum(u) for u in self.afud],
+            flatten([self.packing_node_type(u, t) for t in self.naftypes] for u in self.afud),
+            [self.packing_node_self(u) for u in self.afud],
+            # 3.
+            [self.packing_type_sum(t) for t in self.naftypes]
+        ))
+
+    def solve(self):
+        # start = time.perf_counter()
+        r = self.realizable()
+        p = self.packable()
+        total = self.variable_clauses + r + p
+        # print("Constructing:", time.perf_counter() - start)
+        # print(len(total))
+        # start = time.perf_counter()
+        ans = solve_expr(total)
+        # print("Solving:", time.perf_counter() - start)
+        return ans
+
+    def decode(self, rresult):
+        result = {str(k) for k, v in rresult.items() if v}
+        arb = nx.DiGraph()
+        psi = {}
+        g = defaultdict(lambda: defaultdict(int))
+        for k, v in self.l_vars.items():
+            if str(v) in result:
+                arb.add_edge(*k)
+        for (u, i), v in self.psi_vars.items():
+            if str(v) in result:
+                psi[u] = self.invtau[i].pop()
+                # g(u, psi(u)) is 1 too big
+                g[u][i] -= 1
+        for (e, i), lv in self.g_vars.items():
+            for b, v in enumerate(lv):
+                if str(v) in result:
+                    g[e][i] += 2 ** b
+        for e, d in g.items():
+            children = []
+            for i, count in d.items():
+                children += [self.invtau[i].pop() for _ in range(count)]
+            if len(children) == 0:
+                # already packed all nodes (during psi)
+                continue
+            for group in split_nodes(children):
+                subarb, root = bin_arb(group)
+                arb = nx.union(arb, subarb)
+                arb.add_edge(e, root)
+        nx.relabel_nodes(arb, psi, copy=False)
+        return arb
+
+class OldConditions(Conditions):
+    def __init__(self, graph, v_star, a_f, dummy, naftypes, tau, invtau, mu):
+        super().__init__(graph, v_star, a_f, dummy, naftypes, tau, invtau, mu)
+        self.afud_and_pairs = self.afud.union(distinct2(self.afud))
+
+        self.length_vars = {
+            (u, v): [new_var(f"len_{u}->{v}_{b}") for b in self.lln_indices]
+            for u, v in distinct2(self.afud)
+            if v != self.v_star
+        }
+
+        self.g_vars = {
+            (e, i): [new_var(f"g_{e}_{i}_{b}") for b in self.ln_indices]
+            for e in self.afud_and_pairs
+            for i in self.naftypes
+        }
+
+    def loc_check_len_sensible(self, u, v):
+        # for u, v in distinct2(afud) if v != v_star  # possibly should just be false/true for v_star
+        assert u in self.afud and v in self.afud and u != v
+        if v == self.v_star:
+            # no arcs to v_star so implies short circuits
+            return true
+        return implies(self.is_arc(u, v) & (true if u in self.a_f else self.in_closure(u)),
+                       all_(~self.length_vars[u, v][b] for b in self.lln_indices))
 
     def loc_check_path(self, u, v):
         assert u in self.afud and v in self.afud and u != v
@@ -389,23 +448,9 @@ class Conditions:
 
     def realizable(self):
         return flatten((
-            # (i) Validity
-            [self.at_most_one_parent(u) for u in self.afuddv],
-            [self.exactly_one_type(u) for u in self.dummy],
-            [self.exactly_one_size_bit(u) for u in self.afud],
-            [self.chi_vars[self.v_star][self.ln]],
-            [self.at_most_one_dist(u) for u in self.afuddv],
-            [self.at_least_one_dist(u) for u in self.afuddv],
-            [all_(self.verify_dist(u, d) for u in self.afuddv) for d in self.dist_b_indices],
-            [self.reachable(u) for u in self.dummy],
-            [self.not_leaf(u) for u in self.dummy],
-            # (ii)
-            [self.if_arc_then_valid(u, v) for u, v in distinct2(self.afud)],
+            super().realizable(),
             [self.loc_check_len_sensible(u, v) for u, v in distinct2(self.afud)],
-            [self.loc_check_size_dec(u, v) for u, v in distinct2(self.afud)],
             [self.loc_check_path(u, v) for u, v in distinct2(self.afud)],
-            # (iii)
-            [self.loc_check_size_diff(u, v, w) for u, v, w in itertools.permutations(self.afud, 3)]
         ))
 
     def packing_node_sum(self, u):
@@ -423,28 +468,6 @@ class Conditions:
                 f"pnslhs2:{u}_{v}"
             )
         return all_(equivalent(lv, rv) for lv, rv in zip(lhs, self.chi_vars[u]))
-
-    def types_beats(self, u, threshold, u_wins):
-        # strict inequalities?
-        comp = operator.le if u_wins else operator.ge
-        if u in self.dummy:
-            return at_least_one(self.psi_vars[u, i] for i in self.naftypes if comp(i, threshold))
-        else:  # u in self.a_f
-            return true if comp(self.tau[u], threshold) else false
-        #  and self.num[threshold] > 0 ?
-
-    def packing_node_type(self, u, t):
-        assert u in self.afud and t in self.naftypes
-        return implies(at_least_one(self.g_vars[u, t][b] for b in self.ln_indices), self.types_beats(u, t, True))
-
-    def packing_node_self(self, u):
-        assert u in self.afud
-        if u in self.a_f:
-            # psi(u) isn't defined but it doesn't matter
-            return true
-        return all_(implies(self.psi_vars[u, i],
-                            at_least_one(self.g_vars[u, i][b] for b in self.ln_indices)
-        ) for i in self.naftypes)
 
     def packing_arc_sum(self, a):
         u, v = a
@@ -474,22 +497,9 @@ class Conditions:
 
     def packable(self):
         return flatten((
-            # 1.
-            [self.packing_node_sum(u) for u in self.afud],
-            flatten([self.packing_node_type(u, t) for t in self.naftypes] for u in self.afud),
-            [self.packing_node_self(u) for u in self.afud],
+            super().packable(),
             # 2.
             [self.packing_arc_sum(a) for a in distinct2(self.afud) if a[1] != self.v_star],
             flatten([self.packing_arc_type(a, t) for t in self.naftypes]
                     for a in distinct2(self.afud) if a[1] != self.v_star),
-            # 3.
-            [self.packing_type_sum(t) for t in self.naftypes]
         ))
-
-    def solve(self):
-        r = self.realizable()
-        p = self.packable()
-        return solve_expr(self.variable_clauses + r + p)
-
-def solve(graph):
-    return {v for v in graph.v if solve_one(graph, v)}
