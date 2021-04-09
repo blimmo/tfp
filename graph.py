@@ -30,7 +30,7 @@ class Graph:
         if order is None:
             order = tuple(range(self.n))
         self.order = order
-        self.feedback = feedback
+        self.feedback = tuple(feedback)
 
         self.data.clear()
         # add all edges according to order
@@ -51,9 +51,10 @@ class Graph:
                 self.data[u].add(v)
                 self.data[v].remove(u)
 
-    def make_from_sba(self, winner):
+    def make_from_sba_old(self, winner, arb_comp=lambda u, v: random.choice((True, False))):
         self.data.clear()
-        remaining = set(self.v)
+        feedback = set()
+        remaining = list(self.v)
         remaining_e = {frozenset((u, v)) for u, v in self.e}
         while len(remaining) > 1:
             for u, v in twos(remaining.copy()):
@@ -63,39 +64,64 @@ class Graph:
                     first, second = v, u
                 else:
                     # arbitrary
-                    if random.choice((True, False)):
+                    if arb_comp(u, v):
                         first, second = u, v
                     else:
                         first, second = v, u
                 self.data[first].add(second)
+                if first > second:
+                    feedback.add((first, second))
                 remaining.remove(second)
                 remaining_e.remove(frozenset((u, v)))
         for u, v in remaining_e:
-            if random.choice((True, False)):
+            if arb_comp(u, v):
+                self.data[u].add(v)
+                if u > v:
+                    feedback.add((u, v))
+            else:
+                self.data[v].add(u)
+                if u < v:
+                    feedback.add((u, v))
+        self.feedback = feedback
+        self.order = tuple(range(self.n))
+
+    def make_from_sba(self, winner):
+        self.data.clear()
+        for u, v in self.e:
+            if u == winner:
+                self.data[u].add(v)
+            elif v == winner:
+                self.data[v].add(u)
+            elif u < v:
                 self.data[u].add(v)
             else:
                 self.data[v].add(u)
 
     def find_feedback(self):
-        # if self.feedback is not None:
-        #     return self.feedback
-        f = self.feedback_rec(self.data)
+        for k in range(len(self.e)):
+            print(k)
+            f = self.feedback_rec(self.data, k)
+            if f is not None:
+                break
         self.feedback = f
         return f
 
-    def feedback_rec(self, d):
-        possible = itertools.chain.from_iterable(
+    def feedback_rec(self, d, k):
+        possible = list(itertools.chain.from_iterable(
             ((u, v), (v, w), (w, u))
             for u, v, w in itertools.permutations(d.keys(), 3)
             if v in d[u] and w in d[v] and u in d[w]
-        )
-        best = ()
+        ))
+        if len(possible) == 0:
+            # acyclic
+            return ()
+        if k == 0:
+            return None
         for x, y in possible:
             # swap (x, y)
             d_new = deepcopy(d)
             d_new[x].remove(y)
             d_new[y].add(x)
-            ret = self.feedback_rec(d_new)
-            if len(ret) > len(best):
-                best = ret + ((x, y),)
-        return best
+            ret = self.feedback_rec(d_new, k - 1)
+            if ret is not None:
+                return ret + ((x, y),)
