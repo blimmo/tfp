@@ -2,7 +2,7 @@ import itertools
 from collections import defaultdict
 
 
-def all_vectors(template, s):
+def all_vectors(template, s):  # roughly N_x
     return (v for v in itertools.product(*(range(p + 1) for p in template)) if sum(v) == s)
 
 def twos(a):

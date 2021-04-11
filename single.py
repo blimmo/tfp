@@ -1,3 +1,4 @@
+import ast
 import time
 
 from graph import Graph
@@ -6,20 +7,19 @@ import bruteforce
 import dp
 
 # 8 runs out of memory
-ln = 5
-feedback = [(0, 5), (2, 7), (6, 7), (6, 5), (8, 9)]
-[
-    (0, 3),
-    (1, 3),
-    (0, 5),
-    (2, 7),
-    (6, 7),
-    # (6, 5),
-    # (8, 9),
-    # (12, 15),
-    # (10, 15),
+ln = 6
+feedback = [
+    (0, 2),
+    (3, 7),
+    (2, 5),
+    (0, 6),
+    (1, 8),
+    (1, 13),
+    (10, 12)
 ]
-v_star = 3
+v_star = 5
+inp = "7; 2; [(0, 5), (2, 7), (6, 7), (6, 5), (8, 9), (12, 15), (10, 15)]"
+# ln, v_star, feedback = (ast.literal_eval(i.strip()) for i in inp.split(";")[:3])
 tournament = Graph(ln)
 tournament.make_tournament(feedback=feedback)
 print(ln, v_star, feedback)

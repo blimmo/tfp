@@ -3,7 +3,6 @@ import math
 import operator
 from collections import defaultdict
 from functools import partial, reduce
-from pprint import pprint
 
 import networkx as nx
 import sympy
@@ -62,7 +61,7 @@ def split_nodes(nodes):
             start = i + start
         i <<= 1
 
-def solve_one(graph, v_star, decision=True, improvement=True):
+def solve_one(graph, v_star, *, decision=True, improvement=True):
     cls = Conditions if improvement else OldConditions
     # print(f"v_star = {v_star}")
     v_f = frozenset(sum(graph.feedback, start=()))
