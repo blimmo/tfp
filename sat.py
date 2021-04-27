@@ -77,14 +77,9 @@ def solve_one(graph, v_star, *, decision=True, improvement=True):
     # naftypes = tuple(range(cur + 1))
     # types = tuple(i / 2 for i in range(2 * len(a_f) + 1))
 
-    max_dummy_size = max(min(4 * len(a_f) - 5, graph.n) - len(a_f), 0)
-    # max_dummy_size = min(4 * len(a_f), graph.n) - len(a_f)
-    # print(len(a_f), max_dummy_size)
-    # |LCA(A_f)| <= |A_f| - 2?
-    # if 4 * len(a_f) > graph.n:
-    #     to_iter = range(graph.n - len(a_f) + 1)
-    # else:
-    #     to_iter = (3 * len(a_f),)
+    # |LCA(A_f) \ A_F| <= |A_F| - 2
+    # |A_F u dummy| <= |A_F| + (|A_F| - 2) + (|A_F| - 1)
+    max_dummy_size = max(min(3 * len(a_f) - 3, graph.n) - len(a_f), 0)
     for dummy_size in range(max_dummy_size + 1):
         dummy = {-i for i in range(1, dummy_size + 1)}
         cond = cls(graph, v_star, a_f, dummy, naftypes, tau, invtau, mu)

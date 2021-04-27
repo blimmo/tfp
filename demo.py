@@ -32,15 +32,19 @@ def line_layout(order, a_f):
         out[v] = out[v][0], 1
     return out
 
-tournament = Graph(4)
-tournament.make_tournament(feedback=((0, 3), (0, 2), (3, 4)))
+def show(result, v_star):
+    if result is not None:
+        # nx.relabel_nodes(result, node_map, copy=False)
+        nx.draw(result, with_labels=True, pos=bin_arb_layout(result, v_star))  # , ax=ax2)  # node_map[v_star]
+        plt.show()
 
-fig, (ax1, ax2) = plt.subplots(1, 2)
-g = nx.DiGraph(tournament.data)
-nx.draw(g, with_labels=True, pos=line_layout(tournament.order, a_f=tournament.feedback), ax=ax1)
-v_star = 4
-result = sat.solve_one(tournament, v_star, decision=False)
-if result is not None:
-    # nx.relabel_nodes(result, node_map, copy=False)
-    nx.draw(result, with_labels=True, pos=bin_arb_layout(result, v_star), ax=ax2)  # node_map[v_star]
-    plt.show()
+if __name__ == "__main__":
+    tournament = Graph(3)
+    tournament.make_tournament(feedback=((3, 7), (0, 7)))
+
+    # fig, (ax1, ax2) = plt.subplots(1, 2)
+    g = nx.DiGraph(tournament.data)
+    # nx.draw(g, with_labels=True, pos=line_layout(tournament.order, a_f=tournament.feedback), ax=ax1)
+    v_star = 0
+    result = sat.solve_one(tournament, v_star, decision=False)
+    show(result, v_star)
