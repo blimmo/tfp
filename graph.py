@@ -51,7 +51,7 @@ class Graph:
                 self.data[u].add(v)
                 self.data[v].remove(u)
 
-    def make_from_sba_old(self, winner, arb_comp=lambda u, v: random.choice((True, False))):
+    def make_from_sba(self, winner, arb_comp=lambda u, v: random.choice((True, False))):
         self.data.clear()
         feedback = set()
         remaining = list(self.v)
@@ -84,18 +84,6 @@ class Graph:
                     feedback.add((u, v))
         self.feedback = feedback
         self.order = tuple(range(self.n))
-
-    def make_from_sba(self, winner):
-        self.data.clear()
-        for u, v in self.e:
-            if u == winner:
-                self.data[u].add(v)
-            elif v == winner:
-                self.data[v].add(u)
-            elif u < v:
-                self.data[u].add(v)
-            else:
-                self.data[v].add(u)
 
     def find_feedback(self):
         for k in range(len(self.e)):

@@ -10,7 +10,6 @@ def bin_arb_layout(graph: nx.DiGraph, root, area=((-1, 1), (-1, 1)), i=0):
     midy = sum(y) / 2
     if len(graph) == 1:
         return {nx.utils.arbitrary_element(graph): (midx, midy)}
-    # (root, _), (subroot, _) = heapq.nlargest(2, graph.out_degree(), key=lambda p: p[1])
     subroot = max(graph.successors(root), key=lambda v: graph.out_degree(v))
     subnodes = nx.descendants(graph, subroot) | {subroot}
     subarb1, subarb2 = graph.subgraph(graph.nodes - subnodes), graph.subgraph(subnodes)
@@ -23,6 +22,7 @@ def bin_arb_layout(graph: nx.DiGraph, root, area=((-1, 1), (-1, 1)), i=0):
     out = bin_arb_layout(subarb1, root, (x1, y1), i + 1)
     out.update(bin_arb_layout(subarb2, subroot, (x2, y2), i + 1))
     return out
+    # In 3.9:
     # return bin_arb_layout(subarb1, root, coords1, i + 1) | bin_arb_layout(subarb2, subroot, coords2, i + 1)
 
 def line_layout(order, a_f):
@@ -34,17 +34,14 @@ def line_layout(order, a_f):
 
 def show(result, v_star):
     if result is not None:
-        # nx.relabel_nodes(result, node_map, copy=False)
-        nx.draw(result, with_labels=True, pos=bin_arb_layout(result, v_star))  # , ax=ax2)  # node_map[v_star]
+        nx.draw(result, with_labels=True, pos=bin_arb_layout(result, v_star))
         plt.show()
 
 if __name__ == "__main__":
     tournament = Graph(3)
     tournament.make_tournament(feedback=((3, 7), (0, 7)))
 
-    # fig, (ax1, ax2) = plt.subplots(1, 2)
     g = nx.DiGraph(tournament.data)
-    # nx.draw(g, with_labels=True, pos=line_layout(tournament.order, a_f=tournament.feedback), ax=ax1)
     v_star = 0
     result = sat.solve_one(tournament, v_star, decision=False)
     show(result, v_star)

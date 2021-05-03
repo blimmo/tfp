@@ -225,31 +225,13 @@ class Conditions:
         if u in self.a_f:
             return at_least_one(self.psi_vars[v, i] for i in self.naftypes if i > self.tau[u])
         if v in self.a_f:
-            return at_least_one(self.psi_vars[u, i] for i in self.naftypes if i < self.tau[v])  # maybe >?
+            return at_least_one(self.psi_vars[u, i] for i in self.naftypes if i < self.tau[v])
         return at_least_one(self.psi_vars[u, i] & self.psi_vars[v, j]
-                            for i, j in itertools.combinations(self.naftypes, 2))  # maybe reversed?
+                            for i, j in itertools.combinations(self.naftypes, 2))
 
     def if_arc_then_valid(self, u, v):
         assert u in self.afud and v in self.afud and u != v
         return implies(self.is_arc(u, v), self.beats(u, v))
-
-    def in_closure(self, u):
-        if u in self.dummy:
-            return self.is_node(u) & at_least_one(self.l_vars[u, p] & self.l_vars[u, q]
-                                                  for p, q in itertools.combinations(self.afuddv, 2)
-                                                  if p != u and q != u)
-        else:
-            return false
-
-    def child_of_closure(self, u):
-        if u in self.dummy:
-            return self.is_node(u) & ~self.in_closure(u)
-        else:
-            return false
-
-    def no_deg2_consec_dum(self, u, v):
-        assert u in self.dummy and v in self.dummy and u != v
-        return implies(self.is_arc(u, v) & self.child_of_closure(u), self.child_of_closure(v))
 
     def loc_check_size_dec(self, u, v):
         assert u in self.afud and v in self.afud and u != v
@@ -308,7 +290,6 @@ class Conditions:
             return at_least_one(self.psi_vars[u, i] for i in self.naftypes if comp(i, threshold))
         else:  # u in self.a_f
             return true if comp(self.tau[u], threshold) else false
-        #  and self.num[threshold] > 0 ?
 
     def packing_node_type(self, u, t):
         assert u in self.afud and t in self.naftypes
@@ -401,6 +382,24 @@ class OldConditions(Conditions):
             for e in self.afud_and_pairs
             for i in self.naftypes
         }
+
+    def in_closure(self, u):
+        if u in self.dummy:
+            return self.is_node(u) & at_least_one(self.l_vars[u, p] & self.l_vars[u, q]
+                                                  for p, q in itertools.combinations(self.afuddv, 2)
+                                                  if p != u and q != u)
+        else:
+            return false
+
+    def child_of_closure(self, u):
+        if u in self.dummy:
+            return self.is_node(u) & ~self.in_closure(u)
+        else:
+            return false
+
+    def no_deg2_consec_dum(self, u, v):
+        assert u in self.dummy and v in self.dummy and u != v
+        return implies(self.is_arc(u, v) & self.child_of_closure(u), self.child_of_closure(v))
 
     def loc_check_len_sensible(self, u, v):
         # for u, v in distinct2(afud) if v != v_star  # possibly should just be false/true for v_star
