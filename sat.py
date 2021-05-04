@@ -142,15 +142,6 @@ class Conditions:
             for i in self.naftypes
         }
 
-        # For LocCheckSize(Dec/Diff)
-        self.same_bit_vars = same_bit_vars = {(u, v): [new_var(f"samebit_{u}_{v}_{b}") for b in self.ln_indices]
-                                              for u, v in distinct2(self.afud)}
-        self.variable_clauses.append(all_(all_(
-            equivalent(same_bit_vars[u, v][b], ((self.chi_vars[u][b] & self.chi_vars[v][b])
-                       | (~self.chi_vars[u][b] & ~self.chi_vars[v][b])))
-            for b in self.ln_indices
-        ) for u, v in distinct2(self.afud)))
-
     def sum(self, x, y, prefix):
         if len(x) < len(y):
             x = x + [false] * (len(y) - len(x))
@@ -180,15 +171,11 @@ class Conditions:
 
     def exactly_one_size_bit(self, u):
         assert u in self.afud
-        return exactly_one(self.chi_vars[u][b] for b in self.ln_indices)
+        return exactly_one(self.chi_vars[u])
 
-    def at_most_one_dist(self, u):
+    def exactly_one_dist(self, u):
         assert u in self.afuddv
-        return at_most_one(self.dist_vars[u, d] for d in self.dist_b_indices)
-
-    def at_least_one_dist(self, u):
-        assert u in self.afuddv
-        return at_least_one(self.dist_vars[u, d] for d in self.dist_b_indices)
+        return exactly_one(self.dist_vars[u, d] for d in self.dist_b_indices)
 
     def verify_dist(self, u, d):
         assert u in self.afuddv and d in self.dist_b_indices
@@ -199,23 +186,14 @@ class Conditions:
             for w in self.afuddv if w != u
         ))
 
-    def reachable(self, u):
-        assert u in self.dummy
-        return at_least_one(self.dist_vars[u, d] for d in self.dist_b_indices)
-
     def not_leaf(self, u):
         assert u in self.dummy
-        return ~self.reachable(u) | at_least_one(self.l_vars[u, w] for w in self.afuddv if w != u)
-
-    def is_node(self, u):
-        assert u in self.afud
-        return true if u in self.a_f else self.reachable(u)
+        return at_least_one(self.l_vars[u, w] for w in self.afuddv if w != u)
 
     def is_arc(self, u, v):
         assert u in self.afud and v in self.afud and u != v
-        return self.is_node(u) & self.is_node(v) & self.l_vars[u, v] if v != self.v_star else false
+        return self.l_vars[u, v] if v != self.v_star else false
 
-    # for u, v in itertools.permutations(afud, 2):
     def beats(self, u, v):
         if u in self.a_f and v in self.a_f:
             if v in self.graph[u]:
@@ -237,8 +215,9 @@ class Conditions:
         assert u in self.afud and v in self.afud and u != v
         return implies(
             self.is_arc(u, v),
-            at_least_one(all_(self.same_bit_vars[u, v][i] for i in self.ln_indices if i > b)  # largest condition
-                         & self.chi_vars[u][b] & ~self.chi_vars[v][b]  # & ~self.same_bit_vars[u, v, b] ?
+            at_least_one(all_(equivalent(self.chi_vars[u][i], self.chi_vars[v][i])
+                              for i in self.ln_indices if i > b)  # largest condition
+                         & self.chi_vars[u][b] & ~self.chi_vars[v][b]
                          for b in self.ln_indices)
         )
 
@@ -246,7 +225,7 @@ class Conditions:
         assert u in self.afud and v in self.afud and w in self.afud
         return implies(
             self.is_arc(u, v) & self.is_arc(u, w),
-            ~all_(self.same_bit_vars[v, w][b] for b in self.ln_indices)
+            ~all_(equivalent(self.chi_vars[v][b], self.chi_vars[w][b]) for b in self.ln_indices)
         )
 
     def realizable(self):
@@ -256,10 +235,8 @@ class Conditions:
             [self.exactly_one_type(u) for u in self.dummy],
             [self.exactly_one_size_bit(u) for u in self.afud],
             [self.chi_vars[self.v_star][self.ln]],
-            [self.at_most_one_dist(u) for u in self.afuddv],
-            [self.at_least_one_dist(u) for u in self.afuddv],
+            [self.exactly_one_dist(u) for u in self.afuddv],
             [all_(self.verify_dist(u, d) for u in self.afuddv) for d in self.dist_b_indices],
-            [self.reachable(u) for u in self.dummy],
             [self.not_leaf(u) for u in self.dummy],
             # (ii)
             [self.if_arc_then_valid(u, v) for u, v in distinct2(self.afud)],
@@ -293,16 +270,11 @@ class Conditions:
 
     def packing_node_type(self, u, t):
         assert u in self.afud and t in self.naftypes
-        return implies(at_least_one(self.g_vars[u, t][b] for b in self.ln_indices), self.types_beats(u, t, True))
+        return implies(at_least_one(self.g_vars[u, t]), self.types_beats(u, t, True))
 
-    def packing_node_self(self, u):
-        assert u in self.afud
-        if u in self.a_f:
-            # psi(u) isn't defined but it doesn't matter
-            return true
-        return all_(implies(self.psi_vars[u, i],
-                            at_least_one(self.g_vars[u, i][b] for b in self.ln_indices)
-        ) for i in self.naftypes)
+    def packing_node_self(self, u, i):
+        assert u in self.dummy and i in self.naftypes
+        return implies(self.psi_vars[u, i], at_least_one(self.g_vars[u, i]))
 
     def packing_type_sum(self, t):
         i = iter(self.afud)
@@ -318,21 +290,16 @@ class Conditions:
             # 1.
             [self.packing_node_sum(u) for u in self.afud],
             flatten([self.packing_node_type(u, t) for t in self.naftypes] for u in self.afud),
-            [self.packing_node_self(u) for u in self.afud],
+            flatten([self.packing_node_self(u, i) for i in self.naftypes] for u in self.dummy),
             # 3.
             [self.packing_type_sum(t) for t in self.naftypes]
         ))
 
     def solve(self):
-        # start = time.perf_counter()
         r = self.realizable()
         p = self.packable()
         total = self.variable_clauses + r + p
-        # print("Constructing:", time.perf_counter() - start)
-        # print(len(total))
-        # start = time.perf_counter()
         ans = solve_expr(total)
-        # print("Solving:", time.perf_counter() - start)
         return ans
 
     def decode(self, rresult):
@@ -382,6 +349,14 @@ class OldConditions(Conditions):
             for e in self.afud_and_pairs
             for i in self.naftypes
         }
+
+        # For LocCheckSize(Dec/Diff)
+        self.same_bit_vars = same_bit_vars = {(u, v): [new_var(f"samebit_{u}_{v}_{b}") for b in self.ln_indices]
+                                              for u, v in distinct2(self.afud)}
+        self.variable_clauses.append(all_(all_(
+            equivalent(same_bit_vars[u, v][b], self.chi_vars[u][b], self.chi_vars[v][b])
+            for b in self.ln_indices
+        ) for u, v in distinct2(self.afud)))
 
     def in_closure(self, u):
         if u in self.dummy:
