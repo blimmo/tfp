@@ -6,19 +6,18 @@ import sat
 import bruteforce
 import dp
 
-# 8 runs out of memory
-ln = 6
+ln = 3
 feedback = [
-    (0, 2),
+    (0, 3),
     (3, 7),
-    (2, 5),
-    (0, 6),
-    (1, 8),
-    (1, 13),
-    (10, 12)
+    # (2, 5),
+    # (0, 6),
+    # (1, 8),
+    # (1, 13),
+    # (10, 12)
 ]
-v_star = 5
-inp = "7; 2; [(0, 5), (2, 7), (6, 7), (6, 5), (8, 9), (12, 15), (10, 15)]"
+v_star = 2
+# inp = "5; 27; ((0, 14), (3, 19), (6, 11))"
 # ln, v_star, feedback = (ast.literal_eval(i.strip()) for i in inp.split(";")[:3])
 tournament = Graph(ln)
 tournament.make_tournament(feedback=feedback)

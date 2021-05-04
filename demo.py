@@ -38,10 +38,10 @@ def show(result, v_star):
         plt.show()
 
 if __name__ == "__main__":
-    tournament = Graph(3)
+    tournament = Graph(3)  # log(n)
     tournament.make_tournament(feedback=((3, 7), (0, 7)))
-
-    g = nx.DiGraph(tournament.data)
     v_star = 0
+
+    # g = nx.DiGraph(tournament.data)
     result = sat.solve_one(tournament, v_star, decision=False)
     show(result, v_star)

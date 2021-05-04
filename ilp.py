@@ -1,9 +1,13 @@
+import ast
 import itertools
+import time
+
 import networkx
 import pulp
 from pulp import lpSum as csum
 
 from common import all_vectors
+from graph import Graph
 
 solver = pulp.PULP_CBC_CMD(msg=False)
 
@@ -53,7 +57,7 @@ def solve_one(G, v_star):
             num[-1] += 1
     num = tuple(num)
 
-    max_h = min(8 * len(a_f), G.n)
+    max_h = min(3 * len(a_f) - 3, G.n)
     for total_vertices in range(len(a_f), max_h + 1):
         # how much bigger is b_f than a_f
         extra_vertices = total_vertices - len(a_f)
@@ -133,3 +137,26 @@ def solve_ilp(num, a_f, h, tau, chi, psi):
         return True
     else:
         raise ValueError(f"Unknown status {status}")
+
+if __name__ == "__main__":
+    ln = 2
+    feedback = [
+        (0, 2),
+        # (3, 7),
+        # (2, 5),
+        # (0, 6),
+        # (1, 8),
+        # (1, 13),
+        # (10, 12)
+    ]
+    v_star = 2
+    # inp = "4; 7; ((8, 1), (12, 6), (7, 8), (0, 2))"
+    # ln, v_star, feedback = (ast.literal_eval(i.strip()) for i in inp.split(";")[:3])
+
+    tournament = Graph(ln)
+    tournament.make_tournament(feedback=feedback)
+    print(ln, v_star, feedback)
+
+    start = time.perf_counter()
+    result = solve_one(tournament, v_star)
+    print(result, time.perf_counter() - start)

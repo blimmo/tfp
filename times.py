@@ -7,12 +7,13 @@ from graph import Graph
 
 random.seed(0)
 
+repeats = 5
 for k in range(2, 8):
     ln = k
     tournament = Graph(ln)
     i = 0
     j = 0
-    while i < 5 or j < 5:
+    while i < repeats or j < repeats:
         feedback = tuple(tuple(random.sample(tuple(tournament.v), k=2)) for _ in range(k))
         v_star = random.choice(tuple(tournament.v))
         tournament.make_tournament(feedback=feedback)
